@@ -1,0 +1,169 @@
+# Example configuration for LNP generation
+# This demonstrates all available parameters for frame-geo
+
+[metadata]
+name = "lnp_example_generation"
+description = "Example LNP structure generation with all features"
+random_seed = 42
+
+[structure]
+type = "lnp"  # Structure type (currently only "lnp" is supported)
+
+# ============================================
+# GRID CONFIGURATION
+# ============================================
+[grid]
+nx = 128              # Grid size in x direction (voxels)
+ny = 128              # Grid size in y direction (voxels)
+nz = 128              # Grid size in z direction (voxels)
+dx_nm = 1.0           # Voxel size in x direction (nanometers)
+dy_nm = 1.0           # Voxel size in y direction (nanometers)
+dz_nm = 1.0           # Voxel size in z direction (nanometers)
+
+# ============================================
+# GENERATION PARAMETERS
+# ============================================
+[generation]
+num_samples = 100              # Number of valid structures to generate
+parallel_workers = 1           # Number of parallel workers (future enhancement)
+max_retries_per_sample = 100   # Max attempts to generate a valid structure
+
+# ============================================
+# OUTPUT CONFIGURATION
+# ============================================
+[output]
+base_path = "./output/lnp_example"
+mode = "overwrite"             # "overwrite" or "append"
+save_parametric = true         # Save parametric representations
+save_voxelized = true          # Save voxelized grids
+save_validation_logs = true    # Save validation statistics
+save_statistics = true         # Save parameter statistics
+
+# ============================================
+# PRIORS (Statistical distributions for parameters)
+# ============================================
+
+# Shell1 (outer bilayer shell - always present)
+[priors.shell1_radius_nm]
+distribution = "Uniform"
+lower = 40.0
+upper = 80.0
+
+[priors.shell1_head_thickness_nm]
+distribution = "Uniform"
+lower = 1.5
+upper = 3.0
+
+[priors.shell1_tail_thickness_nm]
+distribution = "Uniform"
+lower = 3.0
+upper = 6.0
+
+# Shell2 (optional inner bilayer shell)
+[priors.shell2_probability]
+distribution = "Bernoulli"
+p = 0.3                # 30% chance of having shell2
+
+[priors.shell2_head_thickness_nm]
+distribution = "Uniform"
+lower = 1.5
+upper = 3.0
+
+[priors.shell2_tail_thickness_nm]
+distribution = "Uniform"
+lower = 3.0
+upper = 6.0
+
+# Payload particles (spherical particles inside the shells)
+[priors.payload_core_radius_nm]
+distribution = "Uniform"
+lower = 2.0
+upper = 5.0
+
+[priors.payload_shell_head_thickness_nm]
+distribution = "Uniform"
+lower = 1.0
+upper = 2.0
+
+[priors.payload_shell_tail_thickness_nm]
+distribution = "Uniform"
+lower = 1.5
+upper = 3.0
+
+# Packing fraction determines how many payloads fit
+[priors.payload_packing_fraction]
+distribution = "Uniform"
+lower = 0.2
+upper = 0.6
+
+# Blebs (surface protrusions on shell1)
+[priors.target_num_blebs]
+distribution = "Poisson"
+mu = 5.0               # Average number of blebs
+
+[priors.bleb_shell_radius_nm]
+distribution = "Uniform"
+lower = 3.0
+upper = 8.0
+
+[priors.bleb_shell_head_thickness_nm]
+distribution = "Uniform"
+lower = 1.0
+upper = 2.0
+
+[priors.bleb_shell_tail_thickness_nm]
+distribution = "Uniform"
+lower = 1.5
+upper = 3.0
+
+# ============================================
+# VALIDATION
+# ============================================
+[validation]
+enabled = true
+
+[validation.rules]
+geometric_feasibility = true
+volume_conservation = true
+grid_bounds = true
+shell_nesting = true
+payload_clearance = true
+bleb_placement = true
+minimum_thickness = true
+
+# ============================================
+# VOXELIZATION
+# ============================================
+[voxelization]
+method = "hybrid"  # "analytical", "sampling", or "hybrid"
+
+[voxelization.hybrid]
+use_analytical_for_simple = true
+monte_carlo_samples_per_voxel = 1000
+
+# Channel assignments for material types
+[voxelization.channels]
+shell1_head = 0
+shell1_tail = 1
+shell2_head = 2
+shell2_tail = 3
+payload_core = 4
+payload_head = 5
+payload_tail = 6
+bleb_head = 7
+bleb_tail = 8
+
+# ============================================
+# VISUALIZATION (optional)
+# ============================================
+[visualization]
+enabled = true
+generate_on_completion = true
+num_samples_to_visualize = 5
+
+[visualization.options]
+show_wireframe = true
+show_surface = true
+cross_section_views = ["xy", "xz", "yz"]
+output_format = "png"
+
