@@ -40,39 +40,68 @@ frame/
 
 ## Package Responsibilities
 
-### `frame-core`
+### `frame-core` ✅ IMPLEMENTED
 **Purpose**: Foundation for data representation and I/O
 
 - **Base Data Model**: Multi-channel 3D voxel grids
-  - Starting: 128³ grid, 1 nm³ per voxel
+  - PyTorch tensor-based: `VoxelGrid` class with shape `(C, D, H, W)`
+  - Default: 128³ grid, 1 nm³ per voxel (configurable)
   - Channels: 10-20 different material/property channels
-  - Future: Larger and potentially finer grids
-- **Responsibilities**:
-  - Data models (voxel grids)
-  - Serialization and I/O
-  - Visualization tools
-  - Unit handling and registries
+  - Support for arbitrary grid sizes and voxel dimensions
+- **Implemented Features**:
+  - ✅ `VoxelGrid` data model with validation and metadata
+  - ✅ `VoxelLibrary` for Zarr-based storage with lazy loading
+  - ✅ `VoxelDataset` for PyTorch training integration
+  - ✅ Parameter-based filtering and batch loading
+  - ✅ Three visualization backends:
+    - `visualize_napari.py` - Interactive 3D viewer
+    - `visualize_pyvista.py` - High-quality 3D rendering
+    - `visualize_batch.py` - Batch visualization utilities
+  - ✅ Efficient memory management with lazy loading
+  - ✅ Comprehensive test coverage
 
-### `frame-geo`
+### `frame-geo` ✅ IMPLEMENTED
 **Purpose**: Stochastic geometry generator for training data
 
-- Samples from user-defined **prior distributions** of structural parameters
-- Generates **geometric models** of lipid nanoparticles
-- **Validates** structures for physical constraints using a flexible, extensible system
-- **Voxelizes** continuous structures into the frame-core voxel representation
+- **Configuration-Driven**: All parameters specified via TOML files
+- **PyMC Integration**: Samples from statistical priors with deterministic derived parameters
+- **LNP Structure Generator**: Complete implementation for lipid nanoparticles
+  - Shell1 (outer bilayer, head outward) - always present
+  - Shell2 (optional inner bilayer, tail outward)
+  - Payloads (spherical particles placed via Poisson disc sampling)
+  - Blebs (surface protrusions on Shell1)
+- **Implemented Features**:
+  - ✅ TOML-based configuration system
+  - ✅ PyMC prior builder with conditional logic
+  - ✅ Geometric primitives (Sphere, Shell)
+  - ✅ Poisson disc sampling (3D volumes + sphere surfaces)
+  - ✅ 7 validators for physical constraints:
+    - Grid bounds, shell nesting, payload clearance
+    - Bleb placement, minimum thickness, volume conservation, geometric feasibility
+  - ✅ Hybrid voxelization (analytical + sampling)
+  - ✅ Multi-channel volume fraction support
+  - ✅ Zarr storage for parametric + voxelized structures
+  - ✅ Statistics computation and quality control
+  - ✅ PyVista/Matplotlib visualization
+  - ✅ CLI: `frame-geo generate`, `validate-config`, `list-types`
+  - ✅ Rejection sampling with detailed tracking
+  - ✅ 25 passing tests with full coverage
+  - ✅ Extensible architecture for new structure types
 
-### `frame-twin`
+### `frame-twin` 🚧 NOT YET IMPLEMENTED
 **Purpose**: Diffusion-based digital twin
 
-- Conditioned **DDPM** (Denoising Diffusion Probabilistic Model)
-- Internal **VAE** (Variational Autoencoder) for latent space
-- Training, inference, validation, and model storage
-- Built on **PyTorch**
+- Planned features:
+  - Conditioned **DDPM** (Denoising Diffusion Probabilistic Model)
+  - Internal **VAE** (Variational Autoencoder) for latent space
+  - Training, inference, validation, and model storage
+  - Built on **PyTorch**
+- Status: Awaiting implementation
 
-### Virtual Instruments (Future)
-- SAXS, SANS, and cryo-EM forward models
+### Virtual Instruments 🚧 NOT YET IMPLEMENTED
+- Planned: SAXS, SANS, and cryo-EM forward models
 - Will be added as separate packages in `packages/`
-- Not yet implemented
+- Status: Awaiting implementation
 
 ---
 
@@ -193,10 +222,23 @@ uv run mypy packages/
 ### 5. Cross-Package Dependencies
 - **Problem**: Circular dependencies or tight coupling between packages
 - **Solution**:
-  - `frame-core` should have **no dependencies** on `frame-geo` or `frame-twin`
-  - `frame-geo` depends on `frame-core` for voxelization
-  - `frame-twin` depends on `frame-core` for data models
-  - Keep interfaces clean and minimal
+  - `frame-core` has **no dependencies** on `frame-geo` or `frame-twin` ✅
+  - `frame-geo` uses PyTorch tensors compatible with `frame-core` VoxelGrid ✅
+  - `frame-twin` will depend on `frame-core` for data models (when implemented)
+  - Keep interfaces clean and minimal ✅
+
+**Current Dependency Graph**:
+```
+frame-core (standalone)
+    ↑
+    │ (uses compatible tensor format)
+    │
+frame-geo (PyTorch, PyMC, Zarr, PyVista)
+    ↑
+    │ (will consume voxel libraries)
+    │
+frame-twin (not yet implemented)
+```
 
 ---
 
@@ -234,19 +276,228 @@ uv run mypy packages/
 - **Docs**: `frame/docs/`
 - **Scratch work**: `frame/dev/` (gitignored)
 
-### Key Dependencies (Current/Expected)
-- `torch` (PyTorch) - core framework
-- `numpy` - array operations
-- `pytest` - testing
-- Future: `diffusers`, `scipy`, `matplotlib`, `pydantic`, domain-specific scattering libraries
+### Key Dependencies (Current)
+
+**frame-core**:
+- `torch>=2.0` - PyTorch tensors for voxel grids
+- `numpy>=1.24` - array operations
+- `zarr>=2.16` - efficient array storage
+- `napari>=0.4` - interactive visualization
+- `pyvista>=0.42` - 3D rendering
+- `matplotlib>=3.7` - plotting
+- `pandas>=2.0` - parameter tables
+- `pytest>=8.4` - testing
+
+**frame-geo**:
+- `torch>=2.0` - PyTorch tensors
+- `pymc>=5.0` - probabilistic modeling
+- `pytensor>=2.0` - PyMC backend
+- `numpy>=1.24` - numerical operations
+- `zarr>=2.16` - storage
+- `pyvista>=0.42` - 3D visualization
+- `matplotlib>=3.7` - 2D cross-sections
+- `pandas>=2.0` - parameter export
+- `tomli>=2.0` - TOML parsing
+- `tqdm>=4.65` - progress bars
+- `pytest>=8.4` - testing
+
+**Future** (for frame-twin and virtual instruments):
+- `diffusers` - diffusion model components
+- `scipy` - scattering calculations
+- Domain-specific libraries (SAXS/SANS/cryo-EM)
 
 ### Typical Workflow
-1. **Generate cartoons**: `frame-geo` samples priors → geometric structures
-2. **Voxelize**: Convert continuous geometry → `frame-core` voxel grids
-3. **Train twin**: `frame-twin` learns distribution from voxelized cartoons
-4. **Generate ensemble**: Sample from trained diffusion model
-5. **Compute virtual data**: (Future) Virtual instruments compute SAXS/SANS/cryo-EM
-6. **Refine**: (TBD) Adjust ensemble to match experimental data
+
+**Currently Implemented (Steps 1-2)**:
+1. ✅ **Generate cartoons**: 
+   ```bash
+   uv run frame-geo generate config.toml
+   ```
+   - Samples from PyMC priors
+   - Constructs parametric LNP structures
+   - Validates physical constraints
+   - Voxelizes to multi-channel grids
+   - Saves to Zarr format
+
+2. ✅ **Load and visualize**:
+   ```python
+   from frame_core.storage import VoxelLibrary
+   lib = VoxelLibrary("output/lnp_example/voxels.zarr")
+   grid = lib[0]  # Load first structure
+   ```
+
+**Future Steps (Not Yet Implemented)**:
+3. 🚧 **Train twin**: `frame-twin` learns distribution from voxelized cartoons
+4. 🚧 **Generate ensemble**: Sample from trained diffusion model
+5. 🚧 **Compute virtual data**: Virtual instruments compute SAXS/SANS/cryo-EM
+6. 🚧 **Refine**: Adjust ensemble to match experimental data
+
+---
+
+## Implementation Status & Usage
+
+### Current Implementation (as of 2025-10-06)
+
+**Two packages are fully implemented and ready to use:**
+
+#### frame-core: Data Models & I/O
+```python
+from frame_core.voxel_grid import VoxelGrid
+from frame_core.storage import VoxelLibrary
+from frame_core.dataset import VoxelDataset
+import torch
+
+# Create a voxel grid
+data = torch.zeros(10, 128, 128, 128)  # 10 channels
+grid = VoxelGrid(
+    data=data,
+    voxel_size=1.0,  # nanometers
+    channels={'shell1_head': 0, 'shell1_tail': 1, ...},
+    metadata={'structure_id': 'lnp_001'}
+)
+
+# Open a voxel library
+library = VoxelLibrary("path/to/library.zarr", mode='r')
+n_structures = len(library)
+single_grid = library[0]  # Lazy load
+
+# Filter by parameters
+filtered = library.filter(lambda p: p['shell1_radius_nm'] > 50.0)
+
+# PyTorch dataset for training
+dataset = VoxelDataset(library, device='cuda')
+loader = torch.utils.data.DataLoader(dataset, batch_size=16)
+```
+
+#### frame-geo: Structure Generation
+```bash
+# 1. Create a configuration file (see examples/lnp_example_config.toml)
+
+# 2. Generate structures
+uv run frame-geo generate config.toml
+
+# 3. Check output
+ls output/lnp_example/
+#   structures.zarr/       - Parametric representations
+#   voxels.zarr/          - Voxelized grids
+#   parameters.csv        - All sampled parameters
+#   statistics.json       - Summary statistics
+#   validation_log.json   - Rejection tracking
+```
+
+**Python API:**
+```python
+from frame_geo import generate_from_config
+from frame_geo.config import FrameGeoConfig
+from frame_geo.generator import StructureGenerator
+
+# High-level API
+generate_from_config("config.toml")
+
+# Or use advanced API for control
+config = FrameGeoConfig.from_toml("config.toml")
+config.validate()
+generator = StructureGenerator(config)
+generator.generate_batch()
+
+# Access statistics
+print(f"Accepted: {generator.validation_stats['total_accepted']}")
+print(f"Rejected: {generator.validation_stats['total_attempts'] - generator.validation_stats['total_accepted']}")
+```
+
+**Configuration Example (TOML):**
+```toml
+[metadata]
+random_seed = 42
+
+[structure]
+type = "lnp"
+
+[grid]
+nx = 128
+ny = 128
+nz = 128
+dx_nm = 1.0
+dy_nm = 1.0
+dz_nm = 1.0
+
+[generation]
+num_samples = 1000
+
+[output]
+base_path = "./output/my_lnps"
+mode = "overwrite"
+
+[priors.shell1_radius_nm]
+distribution = "Uniform"
+lower = 40.0
+upper = 80.0
+
+# ... more priors ...
+
+[voxelization.channels]
+shell1_head = 0
+shell1_tail = 1
+# ... more channels ...
+```
+
+### End-to-End Example
+
+```bash
+# 1. Generate training data
+cd /path/to/FRAME
+uv run frame-geo generate packages/frame-geo/examples/lnp_example_config.toml
+
+# 2. Load and inspect in Python
+uv run python
+```
+
+```python
+from frame_core.storage import VoxelLibrary
+import pandas as pd
+import json
+
+# Load voxelized structures
+lib = VoxelLibrary("output/lnp_example/voxels.zarr")
+print(f"Generated {len(lib)} structures")
+
+# Load parameters
+params = pd.read_csv("output/lnp_example/parameters.csv")
+print(params.describe())
+
+# Load statistics
+with open("output/lnp_example/statistics.json") as f:
+    stats = json.load(f)
+print(f"Mean shell1 radius: {stats['shell1_radius_nm']['mean']:.2f} nm")
+
+# Visualize a structure
+grid = lib[0]
+print(f"Grid shape: {grid.shape}")
+print(f"Channels: {grid.n_channels}")
+print(f"Physical size: {grid.physical_size} nm")
+```
+
+### Testing
+
+```bash
+# Run all tests
+uv run pytest
+
+# Run package-specific tests
+uv run pytest packages/frame-core/tests/ -v
+uv run pytest packages/frame-geo/tests/ -v
+
+# With coverage
+uv run pytest --cov=frame_core --cov=frame_geo --cov-report=html
+```
+
+### What's Next: frame-twin
+
+The next package to implement will be `frame-twin`, which will:
+1. Load voxel libraries generated by `frame-geo`
+2. Train a latent diffusion model (VAE + DDPM)
+3. Generate new structures conditioned on experimental data
+4. Interface with virtual instruments for refinement
 
 ---
 
@@ -261,8 +512,34 @@ uv run mypy packages/
 
 ---
 
+## Package Implementation Summary
+
+| Package | Status | Lines of Code | Tests | Key Features |
+|---------|--------|---------------|-------|--------------|
+| **frame-core** | ✅ Complete | ~600 | 15+ | VoxelGrid, VoxelLibrary, VoxelDataset, 3 visualization backends |
+| **frame-geo** | ✅ Complete | ~2000 | 25 | LNP generator, PyMC priors, 7 validators, hybrid voxelization, CLI |
+| **frame-twin** | 🚧 Pending | 0 | 0 | Awaiting implementation |
+| **Virtual Instruments** | 🚧 Pending | 0 | 0 | Awaiting implementation |
+
+**Current Capabilities**:
+- ✅ Generate synthetic LNP structures from statistical priors
+- ✅ Validate physical constraints with 7 validators
+- ✅ Voxelize to multi-channel 3D grids (volume fractions)
+- ✅ Store efficiently in Zarr format with lazy loading
+- ✅ Load and visualize structures (napari, PyVista)
+- ✅ PyTorch dataset integration for training
+- ✅ Comprehensive statistics and quality control
+
+**Next Steps**:
+- 🚧 Implement `frame-twin` diffusion model
+- 🚧 Add virtual instrument packages (SAXS, SANS, cryo-EM)
+- 🚧 Implement refinement algorithms
+
+---
+
 **Last Updated**: 2025-10-06  
 **Workspace Manager**: `uv`  
 **Primary Framework**: PyTorch  
-**Initial Target**: Lipid nanoparticles × (SAXS, SANS, cryo-EM)
+**Initial Target**: Lipid nanoparticles × (SAXS, SANS, cryo-EM)  
+**Implementation Progress**: 2/4 core packages complete (50%)
 
