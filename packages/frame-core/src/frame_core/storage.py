@@ -3,7 +3,7 @@
 from pathlib import Path
 import json
 from datetime import datetime
-from typing import Dict, List, Optional, Union, Any
+from typing import Dict, List, Optional, Union, Any, Tuple
 import warnings
 
 import numpy as np
@@ -45,7 +45,8 @@ class VoxelLibrary:
         if not zarr_path.exists():
             raise FileNotFoundError(f"Zarr data not found: {zarr_path}")
         
-        self.zarr_array = zarr.open_array(str(zarr_path), mode=mode)
+        # Zarr 3.x API - open array from path
+        self.zarr_array = zarr.open(str(zarr_path), mode=mode)
         
         # Load channel info
         self.channels = self._load_channel_info()
@@ -107,7 +108,11 @@ class VoxelLibrary:
         data_tensor = torch.from_numpy(voxel_data.copy())
         
         # Get metadata for this structure
-        params = self.parameters.iloc[idx].to_dict() if self._parameters is not None else {}
+        # Access parameters (triggers lazy load if needed)
+        try:
+            params = self.parameters.iloc[idx].to_dict()
+        except FileNotFoundError:
+            params = {}
         
         return VoxelGrid(
             data=data_tensor,
@@ -273,20 +278,13 @@ class VoxelLibraryWriter:
         zarr_path = path / 'voxel_data.zarr'
         chunk_shape = (1, n_channels, *voxel_shape)
         
-        # Parse compression
-        if compression.startswith('blosc-'):
-            compressor_name = compression.split('-')[1]
-            compressor = zarr.Blosc(cname=compressor_name, clevel=compression_level)
-        else:
-            compressor = compression
-        
-        zarr.open_array(
-            str(zarr_path),
-            mode='w',
+        # Create zarr array (Zarr 3.x API)
+        zarr.create(
             shape=(n_structures, n_channels, *voxel_shape),
             chunks=chunk_shape,
             dtype='float32',
-            compressor=compressor
+            store=str(zarr_path),
+            overwrite=True
         )
         
         # Create manifest
@@ -330,10 +328,7 @@ class VoxelLibraryWriter:
         """
         # Open zarr array if not already open
         if self._zarr_array is None:
-            self._zarr_array = zarr.open_array(
-                str(self.path / 'voxel_data.zarr'),
-                mode='r+'
-            )
+            self._zarr_array = zarr.open(str(self.path / 'voxel_data.zarr'), mode='r+')
         
         # Write voxel data
         self._zarr_array[idx] = voxel_grid.data.cpu().numpy()

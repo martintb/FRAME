@@ -173,7 +173,7 @@ class TestParameterDataFrame:
         
         # Numeric filter
         high_value = params[params['param_value'] > 50]
-        assert len(high_value) == 5
+        assert len(high_value) == 4  # param_value = 60, 70, 80, 90
         
         # String filter
         cat_0 = params[params['param_category'] == 'cat_0']
