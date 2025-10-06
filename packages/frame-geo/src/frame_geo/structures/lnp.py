@@ -203,14 +203,17 @@ class LNPBuilder(StructureBuilder):
             + params.payload_shell_tail_thickness_nm
         )
 
+        # Constrain sampling radius to ensure payloads fit entirely within boundary
+        sampling_radius = available_radius - payload_outer_r
+        
         # Check if payloads can fit
-        if payload_outer_r * 2 >= available_radius:
+        if sampling_radius <= payload_outer_r:  # Need room for at least one diameter
             return []
 
         # Poisson disc sampling in 3D sphere
         positions = poisson_disc_sphere_3d(
             center=center,
-            radius=available_radius,
+            radius=sampling_radius,  # Changed from available_radius
             min_distance=2 * payload_outer_r,  # Non-overlapping
             max_attempts=params.derived_max_payloads * 100,
         )

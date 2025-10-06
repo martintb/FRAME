@@ -46,6 +46,22 @@ uv run frame-geo validate-config examples/lnp_example_config.toml
 
 # List available structure types
 uv run frame-geo list-types
+
+# Visualize a random parametric structure (saves PNG)
+uv run frame-geo visualize output/lnp_example/structures.zarr
+
+# Interactive 3D visualization (opens PyVista window)
+uv run frame-geo visualize output/lnp_example/structures.zarr --interactive
+
+# Visualize a specific structure with cross-sections
+uv run frame-geo visualize output/lnp_example/structures.zarr --index 0 --cross-sections --output-dir ./my_plots
+
+# Print parameter statistics (table format)
+uv run frame-geo stats output/lnp_example/structures.zarr
+
+# Export statistics to CSV or JSON
+uv run frame-geo stats output/lnp_example/structures.zarr --format csv --output stats.csv
+uv run frame-geo stats output/lnp_example/structures.zarr --format json --output stats.json
 ```
 
 #### Using the Python API:
@@ -138,6 +154,104 @@ The `validation_log.json` tracks:
 - Total accepted structures
 - Rejection counts per validator
 - Overall rejection rate
+
+## Visualization
+
+The `frame-geo visualize` command allows you to explore generated structures without voxelization:
+
+### Interactive Mode (Recommended)
+
+```bash
+# Open an interactive PyVista 3D viewer
+uv run frame-geo visualize output/lnp_example/structures.zarr --interactive
+
+# View a specific structure interactively
+uv run frame-geo visualize output/lnp_example/structures.zarr --index 42 --interactive
+```
+
+**Interactive features:**
+- Rotate, zoom, and pan with mouse
+- Real-time 3D rendering
+- Structure information overlay
+- Color-coded components:
+  - **Red**: Shell1 (outer bilayer)
+  - **Blue**: Shell2 (inner bilayer, if present)
+  - **Green**: Payloads
+  - **Yellow**: Blebs
+
+### Static Image Export
+
+```bash
+# Save 3D render to PNG
+uv run frame-geo visualize output/lnp_example/structures.zarr
+
+# Save 3D + cross-sections
+uv run frame-geo visualize output/lnp_example/structures.zarr --cross-sections
+
+# Custom output directory
+uv run frame-geo visualize output/lnp_example/structures.zarr --output-dir ./my_viz
+```
+
+## Parameter Statistics
+
+The `stats` command provides comprehensive statistical analysis of parametric structures:
+
+### Usage
+
+```bash
+# Print table to console
+uv run frame-geo stats output/lnp_example/structures.zarr
+
+# Export to CSV
+uv run frame-geo stats output/lnp_example/structures.zarr --format csv --output stats.csv
+
+# Export to JSON
+uv run frame-geo stats output/lnp_example/structures.zarr --format json --output stats.json
+```
+
+### Output
+
+The tool computes the following statistics for all parameters:
+- **Mean**: Average value across all structures
+- **Std**: Standard deviation
+- **Min/Max**: Range of values
+- **Median**: 50th percentile
+- **Q25/Q75**: 25th and 75th percentiles
+
+Example output:
+```
+                      Parameter   Mean   Std    Min    Max  Median    Q25    Q75
+               shell1_radius_nm 28.388 9.503 11.474 48.386  28.537 20.988 35.613
+       shell1_head_thickness_nm  0.994 0.113  0.802  1.191   0.969  0.907  1.079
+            actual_num_payloads  0.010 0.099  0.000  1.000   0.000  0.000  0.000
+               actual_num_blebs  3.250 2.951  0.000  9.000   2.000  1.000  6.000
+
+============================================================
+SUMMARY
+============================================================
+Total structures analyzed: 100
+Parameters tracked: 17
+
+Key Statistics:
+  Average Shell1 radius: 28.39 nm
+  Shell2 presence rate: 27.0%
+  Average payloads per structure: 0.0
+  Average blebs per structure: 3.2
+============================================================
+```
+
+### Tracked Parameters
+
+The tool analyzes all sampled and derived parameters:
+- Prior parameters (radii, thicknesses, packing fractions)
+- Derived parameters (max_payloads)
+- Realized parameters (actual_num_payloads, actual_num_blebs)
+
+This is useful for:
+- Quality control of generated structures
+- Understanding rejection patterns
+- Verifying prior distributions
+- Reporting in publications
 
 ## Validation System
 

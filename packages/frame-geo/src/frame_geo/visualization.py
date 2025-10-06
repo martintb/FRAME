@@ -65,6 +65,58 @@ class LNPVisualizer:
         plotter.screenshot(str(self.output_dir / filename))
         plotter.close()
 
+    def visualize_3d_interactive(
+        self, structure: LNPStructure, show_wireframe: bool = True
+    ) -> None:
+        """Create interactive 3D visualization using PyVista.
+
+        Args:
+            structure: LNP structure to visualize
+            show_wireframe: Whether to show wireframe edges
+        """
+        plotter = pv.Plotter()
+
+        # Add shell1
+        self._add_shell_to_plot(
+            plotter, structure.shell1, color="red", opacity=0.3, show_edges=show_wireframe
+        )
+
+        # Add shell2
+        if structure.shell2:
+            self._add_shell_to_plot(
+                plotter,
+                structure.shell2,
+                color="blue",
+                opacity=0.3,
+                show_edges=show_wireframe,
+            )
+
+        # Add payloads
+        for payload in structure.payloads:
+            self._add_shell_to_plot(
+                plotter, payload, color="green", opacity=0.5, show_edges=show_wireframe
+            )
+
+        # Add blebs
+        for bleb in structure.blebs:
+            self._add_shell_to_plot(
+                plotter, bleb, color="yellow", opacity=0.4, show_edges=show_wireframe
+            )
+
+        # Add text annotation
+        plotter.add_text(
+            f"LNP Structure\n"
+            f"Shell1: {structure.parameters.shell1_radius_nm:.1f} nm\n"
+            f"Payloads: {structure.parameters.actual_num_payloads}\n"
+            f"Blebs: {structure.parameters.actual_num_blebs}",
+            position="upper_left",
+            font_size=10,
+        )
+
+        # Set camera and show
+        plotter.camera_position = "iso"
+        plotter.show()
+
     def visualize_cross_section(
         self, structure: LNPStructure, plane: Literal["xy", "xz", "yz"], filename: str
     ) -> None:

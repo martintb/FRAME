@@ -92,7 +92,7 @@ def poisson_disc_sphere_surface(
     """Generate Poisson disc sampled points on a sphere surface.
 
     Uses Bridson's algorithm adapted for spherical surfaces with Fibonacci
-    lattice initialization.
+    lattice initialization for uniform coverage.
 
     Args:
         center: Sphere center (x, y, z)
@@ -111,10 +111,24 @@ def poisson_disc_sphere_surface(
     points: List[np.ndarray] = []
     active: List[np.ndarray] = []
 
-    # Start with a random point on the sphere
-    first_point = _random_point_on_sphere(center, radius, rng)
-    points.append(first_point)
-    active.append(first_point)
+    # Initialize with Fibonacci lattice for better coverage
+    # Use multiple seed points (3-5) distributed across sphere
+    num_seeds = min(5, target_count) if target_count else 5
+    seed_points = _fibonacci_sphere(center, radius, num_seeds)
+    
+    # Shuffle to randomize which seed is used first
+    rng.shuffle(seed_points)
+    
+    # Add first seed that doesn't conflict
+    for seed in seed_points:
+        if not points or all(
+            _geodesic_distance(seed, p, center, radius) >= min_distance
+            for p in points
+        ):
+            points.append(seed)
+            active.append(seed)
+            if target_count and len(points) >= target_count:
+                break
 
     attempts = 0
     max_points = target_count if target_count is not None else float("inf")
@@ -230,4 +244,35 @@ def _geodesic_distance(
 
     # Geodesic distance = radius * angle
     return radius * angle
+
+
+def _fibonacci_sphere(
+    center: np.ndarray, radius: float, n_points: int
+) -> List[np.ndarray]:
+    """Generate uniformly distributed points on a sphere using Fibonacci lattice.
+    
+    Args:
+        center: Sphere center
+        radius: Sphere radius
+        n_points: Number of points to generate
+        
+    Returns:
+        List of points uniformly distributed on sphere surface
+    """
+    points = []
+    phi = np.pi * (3.0 - np.sqrt(5.0))  # Golden angle in radians
+    
+    for i in range(n_points):
+        y = 1 - (i / float(n_points - 1 if n_points > 1 else 1)) * 2  # y from 1 to -1
+        r_at_y = np.sqrt(1 - y * y)  # radius at height y
+        
+        theta = phi * i
+        
+        x = np.cos(theta) * r_at_y
+        z = np.sin(theta) * r_at_y
+        
+        point = center + radius * np.array([x, y, z])
+        points.append(point)
+    
+    return points
 

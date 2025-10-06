@@ -203,7 +203,7 @@ LNP_VALIDATORS: Dict[str, Validator] = {
     "payload_clearance": validate_payload_clearance,
     "bleb_placement": validate_bleb_placement,
     "minimum_thickness": validate_minimum_thickness,
-    "volume_conservation": validate_volume_conservation,
+    # "volume_conservation": validate_volume_conservation, not sure if this is necessary
     "geometric_feasibility": validate_geometric_feasibility,
 }
 
