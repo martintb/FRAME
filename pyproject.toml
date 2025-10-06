@@ -1,18 +1,8 @@
-[project]
-name = "frame"
-version = "0.1.0"
-description = "Add your description here"
-readme = "README.md"
-requires-python = ">=3.12"
-classifiers = ["Private :: Do Not Upload"]
-dependencies = []
-
-[project.scripts]
-frame = "frame:main"
-
-[build-system]
-requires = ["uv_build>=0.8.14,<0.9.0"]
-build-backend = "uv_build"
-
 [tool.uv.workspace]
-members = [ "packages/*", "apps/*"]
+members = ["packages/*", "apps/*"]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.1.0",
+]
