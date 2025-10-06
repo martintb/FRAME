@@ -62,19 +62,24 @@ class ParametricStorage:
 
         for param_name in param_names:
             values = np.array([getattr(s.parameters, param_name) for s in structures])
-            store.create_dataset(f"parameters/{param_name}", data=values)
+            store.create_dataset(f"parameters/{param_name}", shape=values.shape, data=values)
 
         # Save positions (variable length - use jagged array approach)
         for i, structure in enumerate(structures):
             if structure.parameters.payload_positions is not None:
+                pos_data = structure.parameters.payload_positions
                 store.create_dataset(
                     f"payloads/{i}/positions",
-                    data=structure.parameters.payload_positions,
+                    shape=pos_data.shape,
+                    data=pos_data,
                 )
 
             if structure.parameters.bleb_positions is not None:
+                bleb_data = structure.parameters.bleb_positions
                 store.create_dataset(
-                    f"blebs/{i}/positions", data=structure.parameters.bleb_positions
+                    f"blebs/{i}/positions", 
+                    shape=bleb_data.shape,
+                    data=bleb_data
                 )
 
         # Save metadata
@@ -139,6 +144,7 @@ class VoxelStorage:
         # Save with compression
         store.create_dataset(
             "grids",
+            shape=batch_np.shape,
             data=batch_np,
             chunks=(1, batch_np.shape[1], 32, 32, 32),  # Chunk per structure
             compression="blosc",

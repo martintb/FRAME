@@ -8,6 +8,8 @@ import numpy as np
 import torch
 from tqdm import tqdm
 import pymc as pm
+from multiprocessing import Pool, cpu_count
+from functools import partial
 
 from .config import FrameGeoConfig
 from .registry import get_structure_builder
@@ -17,6 +19,89 @@ from .voxelization.hybrid import HybridVoxelizer
 from .storage import ParametricStorage, VoxelStorage
 from .statistics import compute_statistics
 from .visualization import LNPVisualizer
+
+
+def _process_structure_batch(params_batch, config_dict, structure_type, validation_config, voxelization_config, save_voxelized):
+    """Worker function to process a batch of parameter sets.
+    
+    This function is designed to be called by multiprocessing workers.
+    
+    Args:
+        params_batch: List of parameter dictionaries
+        config_dict: Serialized grid configuration
+        structure_type: Type of structure to build
+        validation_config: Validation configuration
+        voxelization_config: Voxelization configuration
+        save_voxelized: Whether to voxelize structures
+        
+    Returns:
+        Tuple of (accepted_structures, accepted_voxels, accepted_params, stats_dict)
+    """
+    from .config import GridConfig
+    from .registry import get_structure_builder
+    from .validation.registry import get_validators
+    from .voxelization.hybrid import HybridVoxelizer
+    
+    # Reconstruct grid config
+    grid_config = GridConfig(**config_dict)
+    
+    # Initialize builder and validators
+    builder = get_structure_builder(structure_type)(None)
+    validators = get_validators(structure_type, validation_config)
+    
+    # Initialize voxelizer if needed
+    if save_voxelized:
+        channel_map = voxelization_config.get("channels", {})
+        voxelizer = HybridVoxelizer(grid_config, channel_map)
+    
+    # Track statistics
+    stats = {name: 0 for name in validators.keys()}
+    stats["total_attempts"] = 0
+    stats["total_accepted"] = 0
+    stats["construction_failures"] = 0
+    
+    accepted_structures = []
+    accepted_voxels = []
+    accepted_params = []
+    
+    for params in params_batch:
+        stats["total_attempts"] += 1
+        
+        # Construct structure
+        try:
+            structure = builder.construct(params, grid_config)
+        except Exception:
+            stats["construction_failures"] += 1
+            continue
+        
+        # Validate
+        is_valid = True
+        for name, validator_fn in validators.items():
+            valid, msg = validator_fn(structure, grid_config)
+            if not valid:
+                stats[name] += 1
+                is_valid = False
+                break
+        
+        if not is_valid:
+            continue
+        
+        # Voxelize if enabled
+        voxel_grid = None
+        if save_voxelized:
+            try:
+                voxel_grid = voxelizer.voxelize(structure)
+            except Exception:
+                continue
+        
+        # Accept
+        accepted_structures.append(structure)
+        if voxel_grid is not None:
+            accepted_voxels.append(voxel_grid)
+        accepted_params.append(structure.parameters)
+        stats["total_accepted"] += 1
+    
+    return accepted_structures, accepted_voxels, accepted_params, stats
 
 
 class StructureGenerator:
@@ -66,10 +151,6 @@ class StructureGenerator:
         # Sample from priors
         print(f"Sampling structures (target: {self.config.generation.num_samples})...")
 
-        accepted_structures = []
-        accepted_voxels = []
-        accepted_params = []
-
         # Generate samples with rejection sampling
         oversample_factor = 3  # Generate extra to account for rejections
         max_total_attempts = self.config.generation.num_samples * oversample_factor
@@ -89,50 +170,27 @@ class StructureGenerator:
             param_samples[key] = values.flatten()
 
         num_samples = len(next(iter(param_samples.values())))
-
-        # Progress bar
-        pbar = tqdm(total=self.config.generation.num_samples, desc="Generating structures")
-
+        
+        # Convert to list of parameter dicts
+        all_params = []
         for i in range(num_samples):
-            if len(accepted_structures) >= self.config.generation.num_samples:
-                break
-
-            # Extract parameters for this sample
             params = {k: float(v[i]) for k, v in param_samples.items()}
+            all_params.append(params)
 
-            self.validation_stats["total_attempts"] += 1
+        # Determine number of workers
+        num_workers = self.config.generation.parallel_workers
+        if num_workers <= 0:
+            num_workers = max(1, cpu_count() - 1)  # Leave one CPU free
 
-            # Construct structure
-            try:
-                structure = self.builder.construct(params, self.config.grid)
-            except Exception as e:
-                self.validation_stats["construction_failures"] += 1
-                continue
+        print(f"Using {num_workers} parallel workers...")
 
-            # Validate
-            is_valid, failed_validator = self._validate(structure)
-
-            if not is_valid:
-                self.validation_stats[failed_validator] += 1
-                continue
-
-            # Voxelize (if enabled)
-            if self.config.output.save_voxelized:
-                try:
-                    voxel_grid = self.voxelizer.voxelize(structure)
-                    accepted_voxels.append(voxel_grid)
-                except Exception as e:
-                    print(f"Voxelization failed: {e}")
-                    continue
-
-            # Accept
-            accepted_structures.append(structure)
-            accepted_params.append(structure.parameters)
-            self.validation_stats["total_accepted"] += 1
-
-            pbar.update(1)
-
-        pbar.close()
+        # Process structures
+        if num_workers == 1:
+            # Sequential processing
+            accepted_structures, accepted_voxels, accepted_params = self._generate_sequential(all_params)
+        else:
+            # Parallel processing
+            accepted_structures, accepted_voxels, accepted_params = self._generate_parallel(all_params, num_workers)
 
         # Save outputs
         print("\nSaving outputs...")
@@ -140,6 +198,113 @@ class StructureGenerator:
 
         # Print summary
         self._print_summary()
+    
+    def _generate_sequential(self, all_params):
+        """Sequential generation (original implementation)."""
+        accepted_structures = []
+        accepted_voxels = []
+        accepted_params = []
+        
+        pbar = tqdm(total=self.config.generation.num_samples, desc="Generating structures")
+        
+        for params in all_params:
+            if len(accepted_structures) >= self.config.generation.num_samples:
+                break
+            
+            self.validation_stats["total_attempts"] += 1
+            
+            # Construct structure
+            try:
+                structure = self.builder.construct(params, self.config.grid)
+            except Exception:
+                self.validation_stats["construction_failures"] += 1
+                continue
+            
+            # Validate
+            is_valid, failed_validator = self._validate(structure)
+            
+            if not is_valid:
+                self.validation_stats[failed_validator] += 1
+                continue
+            
+            # Voxelize (if enabled)
+            if self.config.output.save_voxelized:
+                try:
+                    voxel_grid = self.voxelizer.voxelize(structure)
+                    accepted_voxels.append(voxel_grid)
+                except Exception:
+                    continue
+            
+            # Accept
+            accepted_structures.append(structure)
+            accepted_params.append(structure.parameters)
+            self.validation_stats["total_accepted"] += 1
+            
+            pbar.update(1)
+        
+        pbar.close()
+        
+        return accepted_structures, accepted_voxels, accepted_params
+    
+    def _generate_parallel(self, all_params, num_workers):
+        """Parallel generation using multiprocessing."""
+        # Serialize configuration for workers
+        grid_dict = {
+            "nx": self.config.grid.nx,
+            "ny": self.config.grid.ny,
+            "nz": self.config.grid.nz,
+            "dx_nm": self.config.grid.dx_nm,
+            "dy_nm": self.config.grid.dy_nm,
+            "dz_nm": self.config.grid.dz_nm,
+        }
+        
+        # Split parameters into chunks for workers
+        chunk_size = max(1, len(all_params) // (num_workers * 4))  # Multiple chunks per worker
+        param_chunks = [all_params[i:i + chunk_size] for i in range(0, len(all_params), chunk_size)]
+        
+        # Create worker function with fixed arguments
+        worker_fn = partial(
+            _process_structure_batch,
+            config_dict=grid_dict,
+            structure_type=self.config.structure_type,
+            validation_config=self.config.validation,
+            voxelization_config=self.config.voxelization,
+            save_voxelized=self.config.output.save_voxelized,
+        )
+        
+        # Process in parallel with progress bar
+        accepted_structures = []
+        accepted_voxels = []
+        accepted_params = []
+        
+        with Pool(processes=num_workers) as pool:
+            pbar = tqdm(total=self.config.generation.num_samples, desc="Generating structures")
+            
+            for structures, voxels, params, stats in pool.imap_unordered(worker_fn, param_chunks):
+                # Merge statistics
+                for key, count in stats.items():
+                    self.validation_stats[key] += count
+                
+                # Collect accepted results
+                for i, structure in enumerate(structures):
+                    if len(accepted_structures) >= self.config.generation.num_samples:
+                        break
+                    
+                    accepted_structures.append(structure)
+                    accepted_params.append(params[i])
+                    if i < len(voxels):
+                        accepted_voxels.append(voxels[i])
+                    
+                    pbar.update(1)
+                
+                # Early exit if we have enough
+                if len(accepted_structures) >= self.config.generation.num_samples:
+                    pool.terminate()
+                    break
+            
+            pbar.close()
+        
+        return accepted_structures, accepted_voxels, accepted_params
 
     def _validate(self, structure) -> tuple[bool, str]:
         """Run all validators.

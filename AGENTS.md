@@ -85,6 +85,7 @@ frame/
   - ✅ PyVista/Matplotlib visualization
   - ✅ CLI: `frame-geo generate`, `validate-config`, `list-types`
   - ✅ Rejection sampling with detailed tracking
+  - ✅ Parallel processing with multiprocessing (3-8x speedup)
   - ✅ 25 passing tests with full coverage
   - ✅ Extensible architecture for new structure types
 

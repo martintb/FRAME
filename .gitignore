@@ -6,6 +6,11 @@ Icon?
 .Spotlight-V100
 .Trashes
 
+# Outputs
+output/
+outputs/
+data/
+
 # Logs
 logs/
 *.log
