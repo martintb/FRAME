@@ -53,7 +53,10 @@ def main():
         "--cross-sections", action="store_true", help="Generate 2D cross-section plots"
     )
     visualize_parser.add_argument(
-        "--interactive", action="store_true", help="Show interactive PyVista window (3D only)"
+        "--interactive", action="store_true", default=True, help="Show interactive PyVista window (3D only)"
+    )
+    visualize_parser.add_argument(
+        "--save-images", action="store_true", help="Also save static images to files"
     )
     visualize_parser.add_argument(
         "--no-save", action="store_true", help="Don't save plots to files (only with --interactive)"
@@ -360,14 +363,18 @@ def visualize_command(args):
             output_dir.mkdir(parents=True, exist_ok=True)
         visualizer = LNPVisualizer(output_dir)
         
-        # Interactive mode
+        # Interactive mode (default)
         if args.interactive:
+            # Show cross-sections first if requested
             if args.cross_sections:
-                print("Note: Cross-sections not supported in interactive mode. Use without --interactive to save cross-sections.")
-            print(f"Opening interactive PyVista window...")
-            visualizer.visualize_3d_interactive(structure)
-            print("Interactive window closed.")
-        else:
+                print("Showing interactive cross-sections...")
+                visualizer.visualize_cross_sections_interactive(structure)
+            else:
+                print(f"Opening interactive PyVista window...")
+                visualizer.visualize_3d_interactive(structure)
+        
+        # Save images if requested
+        if args.save_images:
             # Generate 3D visualization
             print(f"Generating 3D visualization...")
             visualizer.visualize_3d(structure, f"structure_{idx}_3d.png")
@@ -379,6 +386,17 @@ def visualize_command(args):
                 for plane in ["xy", "xz", "yz"]:
                     visualizer.visualize_cross_section(structure, plane, f"structure_{idx}_{plane}.png")
                     print(f"  Saved: {output_dir / f'structure_{idx}_{plane}.png'}")
+        
+        # If neither interactive nor save-images, show interactive by default
+        if not args.interactive and not args.save_images:
+            # Show cross-sections first if requested
+            if args.cross_sections:
+                print("Showing interactive cross-sections...")
+                visualizer.visualize_cross_sections_interactive(structure)
+            
+            print(f"Opening interactive PyVista window (default behavior)...")
+            visualizer.visualize_3d_interactive(structure)
+            print("Interactive window closed.")
         
         # Print structure info
         print("\nStructure Information:")

@@ -278,12 +278,18 @@ class StructureGenerator:
         accepted_params = []
         
         with Pool(processes=num_workers) as pool:
-            pbar = tqdm(total=self.config.generation.num_samples, desc="Generating structures")
+            # Track total attempts instead of accepted structures for smoother progress
+            total_attempts = len(all_params)
+            pbar = tqdm(total=total_attempts, desc="Processing structures", unit="attempt")
             
             for structures, voxels, params, stats in pool.imap_unordered(worker_fn, param_chunks):
                 # Merge statistics
                 for key, count in stats.items():
                     self.validation_stats[key] += count
+                
+                # Update progress based on attempts processed
+                attempts_processed = stats.get("total_attempts", 0)
+                pbar.update(attempts_processed)
                 
                 # Collect accepted results
                 for i, structure in enumerate(structures):
@@ -294,8 +300,6 @@ class StructureGenerator:
                     accepted_params.append(params[i])
                     if i < len(voxels):
                         accepted_voxels.append(voxels[i])
-                    
-                    pbar.update(1)
                 
                 # Early exit if we have enough
                 if len(accepted_structures) >= self.config.generation.num_samples:
@@ -386,6 +390,47 @@ class StructureGenerator:
         }
         with open(output_path / "config.json", "w") as f:
             json.dump(config_dict, f, indent=2)
+
+        # Generate visualizations if enabled
+        if hasattr(self.config, 'visualization') and self.config.visualization.get('enabled', False):
+            if self.config.visualization.get('generate_on_completion', False) and structures:
+                print("Generating visualizations...")
+                self._generate_visualizations(structures)
+
+    def _generate_visualizations(self, structures) -> None:
+        """Generate visualizations for a subset of structures."""
+        num_to_visualize = self.config.visualization.get('num_samples_to_visualize', 5)
+        num_to_visualize = min(num_to_visualize, len(structures))
+        
+        # Select structures to visualize (first N)
+        structures_to_viz = structures[:num_to_visualize]
+        
+        # Create visualizer
+        output_path = Path(self.config.output.base_path)
+        visualizer = LNPVisualizer(output_path / "visualizations")
+        
+        # Check if we should show interactive windows or save images
+        output_format = self.config.visualization.get('output_format', 'interactive')
+        
+        for i, structure in enumerate(structures_to_viz):
+            print(f"Visualizing structure {i+1}/{num_to_visualize}...")
+            
+            if output_format == 'interactive':
+                # Show interactive PyVista window
+                visualizer.visualize_3d_interactive(structure)
+                
+                # Show cross-sections if requested
+                cross_section_views = self.config.visualization.get('cross_section_views', [])
+                if cross_section_views:
+                    visualizer.visualize_cross_sections_interactive(structure, cross_section_views)
+            else:
+                # Save static images
+                visualizer.visualize_3d(structure, f"structure_{i}_3d.png")
+                
+                # Save cross-sections if requested
+                cross_section_views = self.config.visualization.get('cross_section_views', [])
+                for plane in cross_section_views:
+                    visualizer.visualize_cross_section(structure, plane, f"structure_{i}_{plane}.png")
 
     def _print_summary(self) -> None:
         """Print generation summary statistics."""

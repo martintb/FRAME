@@ -160,12 +160,12 @@ bleb_tail = 8
 # ============================================
 [visualization]
 enabled = true
-generate_on_completion = true
+generate_on_completion = false
 num_samples_to_visualize = 5
 
 [visualization.options]
 show_wireframe = true
 show_surface = true
 cross_section_views = ["xy", "xz", "yz"]
-output_format = "png"
+output_format = "interactive"  # "interactive" or "png"
 
