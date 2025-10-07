@@ -716,6 +716,7 @@ name = "frame-geo"
 version = "0.1.0"
 source = { editable = "packages/frame-geo" }
 dependencies = [
+    { name = "frame-core" },
     { name = "matplotlib" },
     { name = "numpy" },
     { name = "pandas" },
@@ -736,6 +737,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "frame-core", editable = "packages/frame-core" },
     { name = "matplotlib", specifier = ">=3.7.0" },
     { name = "numpy", specifier = ">=1.24.0" },
     { name = "pandas", specifier = ">=2.0.0" },

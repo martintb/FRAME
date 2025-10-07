@@ -16,9 +16,11 @@ from .registry import get_structure_builder
 from .priors.pymc_builder import PriorBuilder
 from .validation.registry import get_validators
 from .voxelization.hybrid import HybridVoxelizer
-from .storage import ParametricStorage, VoxelStorage
+from .storage import ParametricStorage
 from .statistics import compute_statistics
 from .visualization import LNPVisualizer
+from frame_core.voxel_grid import VoxelGrid
+from frame_core.storage import VoxelLibraryWriter
 
 
 def _process_structure_batch(params_batch, config_dict, structure_type, validation_config, voxelization_config, save_voxelized):
@@ -124,7 +126,6 @@ class StructureGenerator:
 
         # Storage
         self.parametric_storage = ParametricStorage(config.output.base_path)
-        self.voxel_storage = VoxelStorage(config.output.base_path)
 
         # Statistics tracking
         self.validation_stats = {name: 0 for name in self.validators.keys()}
@@ -337,7 +338,7 @@ class StructureGenerator:
         # Save voxelized grids
         if self.config.output.save_voxelized and voxels:
             print("Saving voxel grids...")
-            self.voxel_storage.save_batch(voxels)
+            self._save_voxel_library(voxels, params)
 
         # Save parameters CSV
         if params:
@@ -392,10 +393,63 @@ class StructureGenerator:
             json.dump(config_dict, f, indent=2)
 
         # Generate visualizations if enabled
-        if hasattr(self.config, 'visualization') and self.config.visualization.get('enabled', False):
+        if hasattr(self.config, 'visualization') and self.config.visualization and self.config.visualization.get('enabled', False):
             if self.config.visualization.get('generate_on_completion', False) and structures:
                 print("Generating visualizations...")
                 self._generate_visualizations(structures)
+
+    def _save_voxel_library(self, voxels, params) -> None:
+        """Save voxel grids using frame-core VoxelLibraryWriter.
+        
+        Args:
+            voxels: List of voxel grid tensors (each is [C, Z, Y, X])
+            params: List of parameter objects
+        """
+        output_path = Path(self.config.output.base_path)
+        library_path = output_path / "voxels.zarr"
+        
+        # Get grid shape and channel info from first voxel
+        first_voxel = voxels[0]
+        n_channels, nz, ny, nx = first_voxel.shape
+        
+        # Get channel mapping from voxelizer
+        channel_map = self.config.voxelization.get("channels", {})
+        
+        # Create the voxel library
+        writer = VoxelLibraryWriter.create(
+            path=library_path,
+            n_structures=len(voxels),
+            voxel_shape=(nz, ny, nx),
+            n_channels=n_channels,
+            channel_names=channel_map,
+            voxel_size_nm=self.config.grid.dx_nm,
+            structure_type=self.config.structure_type
+        )
+        
+        # Add each structure
+        for i, (voxel_tensor, param) in enumerate(zip(voxels, params)):
+            # Convert tensor to VoxelGrid
+            voxel_grid = VoxelGrid(
+                data=voxel_tensor,
+                voxel_size=self.config.grid.dx_nm,
+                channels=channel_map,
+                metadata={}
+            )
+            
+            # Convert parameters to dict
+            param_dict = {
+                "shell1_radius_nm": param.shell1_radius_nm,
+                "shell1_head_thickness_nm": param.shell1_head_thickness_nm,
+                "shell1_tail_thickness_nm": param.shell1_tail_thickness_nm,
+                "shell2_probability": param.shell2_probability,
+                "actual_num_payloads": param.actual_num_payloads,
+                "actual_num_blebs": param.actual_num_blebs,
+            }
+            
+            writer.add_structure(i, voxel_grid, param_dict)
+        
+        # Finalize the library
+        writer.finalize(compute_statistics=True)
 
     def _generate_visualizations(self, structures) -> None:
         """Generate visualizations for a subset of structures."""

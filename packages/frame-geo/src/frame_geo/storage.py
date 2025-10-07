@@ -1,10 +1,12 @@
-"""Storage for parametric structures and voxel grids."""
+"""Storage for parametric structures.
+
+Note: Voxel grid storage is handled by frame-core's VoxelLibraryWriter.
+"""
 
 from pathlib import Path
 from typing import List
 import numpy as np
 import zarr
-import torch
 import json
 
 from .structures.lnp import LNPStructure, LNPParameters
@@ -107,73 +109,4 @@ class ParametricStorage:
         # TODO: Implement full reconstruction
         # For now, this is a placeholder
         raise NotImplementedError("Loading parametric structures not yet implemented")
-
-
-class VoxelStorage:
-    """Storage for voxelized grids using Zarr."""
-
-    def __init__(self, base_path: str | Path):
-        """Initialize storage.
-
-        Args:
-            base_path: Base directory for storage
-        """
-        self.base_path = Path(base_path)
-        self.voxels_path = self.base_path / "voxels.zarr"
-
-    def save_batch(self, voxel_grids: List[torch.Tensor]) -> None:
-        """Save a batch of voxel grids.
-
-        Args:
-            voxel_grids: List of voxel grid tensors (each is [C, Z, Y, X])
-        """
-        if not voxel_grids:
-            return
-
-        self.voxels_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Stack into batch tensor [N, C, Z, Y, X]
-        batch = torch.stack(voxel_grids, dim=0)
-
-        # Convert to numpy for Zarr storage
-        batch_np = batch.cpu().numpy()
-
-        # Create Zarr store
-        store = zarr.open(str(self.voxels_path), mode="w")
-
-        # Save with compression
-        store.create_dataset(
-            "grids",
-            shape=batch_np.shape,
-            data=batch_np,
-            chunks=(1, batch_np.shape[1], 32, 32, 32),  # Chunk per structure
-            compressors=[zarr.codecs.BloscCodec()],
-        )
-
-        # Save metadata
-        metadata = {
-            "num_structures": len(voxel_grids),
-            "num_channels": batch_np.shape[1],
-            "nz": batch_np.shape[2],
-            "ny": batch_np.shape[3],
-            "nx": batch_np.shape[4],
-        }
-        store.attrs.update(metadata)
-
-    def load_batch(self) -> torch.Tensor:
-        """Load a batch of voxel grids.
-
-        Returns:
-            Batch tensor of shape [N, C, Z, Y, X]
-
-        Raises:
-            FileNotFoundError: If voxels file doesn't exist
-        """
-        if not self.voxels_path.exists():
-            raise FileNotFoundError(f"Voxels not found: {self.voxels_path}")
-
-        store = zarr.open(str(self.voxels_path), mode="r")
-        grids = store["grids"][:]
-
-        return torch.from_numpy(grids)
 
