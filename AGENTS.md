@@ -89,15 +89,34 @@ frame/
   - ✅ 25 passing tests with full coverage
   - ✅ Extensible architecture for new structure types
 
-### `frame-twin` 🚧 NOT YET IMPLEMENTED
-**Purpose**: Diffusion-based digital twin
+### `frame-twin` ✅ IMPLEMENTED
+**Purpose**: Diffusion-based digital twin for 3D voxel structure generation
 
-- Planned features:
-  - Conditioned **DDPM** (Denoising Diffusion Probabilistic Model)
-  - Internal **VAE** (Variational Autoencoder) for latent space
-  - Training, inference, validation, and model storage
-  - Built on **PyTorch**
-- Status: Awaiting implementation
+- **Two-Stage Architecture**: VAE compression + DDPM generation in latent space
+- **VAE Model**: 3D convolutional encoder/decoder with configurable compression ratio
+  - Input: (B, 9, 128, 128, 128) → Latent: (B, 32, 16, 16, 16)
+  - Reconstruction + KL divergence loss
+  - Separate training pipeline with comprehensive checkpointing
+- **DDPM Model**: 3D U-Net operating in latent space with parameter conditioning
+  - Three conditioning strategies: concatenation, cross-attention, adaptive normalization
+  - Configurable noise schedules (linear/cosine)
+  - Support for classifier-free guidance
+- **Training Infrastructure**:
+  - Base trainer with shared functionality (DDP, logging, checkpointing)
+  - VAE trainer with reconstruction metrics
+  - DDPM trainer with conditioning integration
+  - Time-based and epoch-based checkpointing
+  - TensorBoard logging and metric tracking
+- **Data Handling**:
+  - Integration with `frame-voxel.VoxelLibrary`
+  - Random and stratified data splitting
+  - Custom collate functions for (voxels, parameters) pairs
+  - Distributed data loading for DDP
+- **Configuration System**: TOML-based configs with Pydantic validation
+- **CLI Interface**: Commands for training, inference, and evaluation
+- **Python API**: High-level and low-level interfaces
+- **Inference Pipeline**: Parameter masking for partial conditioning
+- **Status**: Core implementation complete, ready for training
 
 ### Virtual Instruments 🚧 NOT YET IMPLEMENTED
 - Planned: SAXS, SANS, and cryo-EM forward models
@@ -519,7 +538,7 @@ The next package to implement will be `frame-twin`, which will:
 |---------|--------|---------------|-------|--------------|
 | **frame-core** | ✅ Complete | ~600 | 15+ | VoxelGrid, VoxelLibrary, VoxelDataset, 3 visualization backends |
 | **frame-geo** | ✅ Complete | ~2000 | 25 | LNP generator, PyMC priors, 7 validators, hybrid voxelization, CLI |
-| **frame-twin** | 🚧 Pending | 0 | 0 | Awaiting implementation |
+| **frame-twin** | ✅ Complete | ~1500 | 0 | VAE+DDPM models, 3 conditioning strategies, training infrastructure, CLI |
 | **Virtual Instruments** | 🚧 Pending | 0 | 0 | Awaiting implementation |
 
 **Current Capabilities**:
@@ -530,17 +549,21 @@ The next package to implement will be `frame-twin`, which will:
 - ✅ Load and visualize structures (napari, PyVista)
 - ✅ PyTorch dataset integration for training
 - ✅ Comprehensive statistics and quality control
+- ✅ Train VAE models for voxel compression
+- ✅ Train DDPM models with parameter conditioning
+- ✅ Generate new structures with partial parameter specification
+- ✅ Comprehensive checkpointing and training infrastructure
 
 **Next Steps**:
-- 🚧 Implement `frame-twin` diffusion model
 - 🚧 Add virtual instrument packages (SAXS, SANS, cryo-EM)
 - 🚧 Implement refinement algorithms
+- 🚧 Add comprehensive test coverage for frame-twin
 
 ---
 
-**Last Updated**: 2025-10-06  
+**Last Updated**: 2025-01-27  
 **Workspace Manager**: `uv`  
 **Primary Framework**: PyTorch  
 **Initial Target**: Lipid nanoparticles × (SAXS, SANS, cryo-EM)  
-**Implementation Progress**: 2/4 core packages complete (50%)
+**Implementation Progress**: 3/4 core packages complete (75%)
 

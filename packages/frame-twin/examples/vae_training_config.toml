@@ -1,0 +1,47 @@
+# VAE Training Configuration for frame-twin
+# This config trains a VAE to compress 3D voxel structures
+
+[metadata]
+name = "lnp_vae_training"
+description = "VAE training for LNP voxel structure compression"
+random_seed = 42
+
+[data]
+voxel_library_path = "./output/lnp/voxels.zarr"
+split_strategy = "random"  # or "stratified"
+train_ratio = 0.8
+val_ratio = 0.1
+test_ratio = 0.1
+# stratify_params = ["shell1_radius_nm", "shell2_probability"]  # for stratified splitting
+
+[model]
+type = "vae"
+input_channels = 9  # Number of material channels
+latent_dim = 32  # Latent space dimension
+latent_spatial_size = [16, 16, 16]  # Moderate compression: 128³ → 16³
+encoder_channels = [9, 32, 64, 128, 256]
+decoder_channels = [256, 128, 64, 32, 9]
+
+[training]
+device = "cuda"  # or "cpu"
+distributed = false  # Set true for DDP
+num_epochs = 100
+batch_size = 16
+learning_rate = 1e-4
+optimizer = "adam"  # "adam", "adamw", or "sgd"
+scheduler = "cosine"  # "cosine", "step", or "none"
+
+[loss]
+reconstruction_weight = 1.0
+kl_weight = 0.001
+
+[checkpointing]
+output_dir = "./checkpoints/vae"
+save_every_epochs = 10
+save_every_minutes = 60  # Time-based checkpointing
+keep_last_n = 3
+save_best = true  # Save best validation loss
+
+[logging]
+log_every_steps = 50
+tensorboard_dir = "./logs/vae"
