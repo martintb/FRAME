@@ -5,7 +5,7 @@ import torch
 import tempfile
 from pathlib import Path
 
-from frame_core import VoxelGrid, VoxelLibraryWriter
+from frame_voxel import VoxelGrid, VoxelLibraryWriter
 
 
 @pytest.fixture

@@ -5,7 +5,7 @@ import torch
 import pandas as pd
 from pathlib import Path
 
-from frame_core import VoxelLibrary, VoxelLibraryWriter, FilteredVoxelLibrary, VoxelGrid
+from frame_voxel import VoxelLibrary, VoxelLibraryWriter, FilteredVoxelLibrary, VoxelGrid
 
 
 class TestVoxelLibraryWriter:

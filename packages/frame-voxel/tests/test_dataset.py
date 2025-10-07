@@ -4,7 +4,7 @@ import pytest
 import torch
 from torch.utils.data import DataLoader
 
-from frame_core import (
+from frame_voxel import (
     VoxelDataset,
     CachedVoxelDataset,
     VoxelLibrary,

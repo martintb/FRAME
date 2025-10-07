@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from frame_core import VoxelGrid
+from frame_voxel import VoxelGrid
 
 
 class TestVoxelGridCreation:

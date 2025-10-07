@@ -19,8 +19,8 @@ from .voxelization.hybrid import HybridVoxelizer
 from .storage import ParametricStorage
 from .statistics import compute_statistics
 from .visualization import LNPVisualizer
-from frame_core.voxel_grid import VoxelGrid
-from frame_core.storage import VoxelLibraryWriter
+from frame_voxel.voxel_grid import VoxelGrid
+from frame_voxel.storage import VoxelLibraryWriter
 
 
 def _process_structure_batch(params_batch, config_dict, structure_type, validation_config, voxelization_config, save_voxelized):
@@ -399,7 +399,7 @@ class StructureGenerator:
                 self._generate_visualizations(structures)
 
     def _save_voxel_library(self, voxels, params) -> None:
-        """Save voxel grids using frame-core VoxelLibraryWriter.
+        """Save voxel grids using frame-voxel VoxelLibraryWriter.
         
         Args:
             voxels: List of voxel grid tensors (each is [C, Z, Y, X])

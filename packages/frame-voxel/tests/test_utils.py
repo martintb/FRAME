@@ -4,7 +4,7 @@ import pytest
 import torch
 import numpy as np
 
-from frame_core import VoxelGrid, VoxelLibrary
+from frame_voxel import VoxelGrid, VoxelLibrary
 
 
 class TestDifferentDataTypes:

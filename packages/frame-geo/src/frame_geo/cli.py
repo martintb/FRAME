@@ -14,15 +14,6 @@ from .registry import list_structure_types, get_structure_builder
 from .voxelization.hybrid import HybridVoxelizer
 from .structures.lnp import LNPBuilder, LNPParameters
 
-# Import frame-core visualization
-try:
-    from frame_core.visualize_napari import NapariViewer, NapariSlicer
-    from frame_core.storage import VoxelLibrary
-except ImportError:
-    NapariViewer = None
-    NapariSlicer = None
-    VoxelLibrary = None
-
 
 def main():
     """Main CLI entry point."""
@@ -94,7 +85,7 @@ def main():
 
     # Voxelize command
     voxelize_parser = subparsers.add_parser(
-        "voxelize", help="Voxelize existing parametric structures using frame-core storage"
+        "voxelize", help="Voxelize existing parametric structures using frame-voxel storage"
     )
     voxelize_parser.add_argument(
         "structures_path", type=str, help="Path to structures.zarr directory"
@@ -112,39 +103,6 @@ def main():
         "--overwrite", action="store_true", help="Overwrite existing output directory"
     )
 
-    # View in napari command
-    napari_parser = subparsers.add_parser(
-        "view-napari", help="Open voxelized structures in napari for interactive visualization"
-    )
-    napari_parser.add_argument(
-        "voxels_path", type=str, help="Path to voxels.zarr directory"
-    )
-    napari_parser.add_argument(
-        "--index", type=int, default=None, help="Structure index to visualize (default: random)"
-    )
-    napari_parser.add_argument(
-        "--channels", type=str, nargs="*", help="Specific channels to show (default: all)"
-    )
-    napari_parser.add_argument(
-        "--opacity", type=float, default=0.5, help="Default opacity for all channels (default: 0.5)"
-    )
-    napari_parser.add_argument(
-        "--rendering", type=str, default="mip", 
-        choices=["mip", "translucent", "attenuated_mip", "minip", "average"],
-        help="Rendering mode (default: mip)"
-    )
-    napari_parser.add_argument(
-        "--slicer", action="store_true", help="Open in 2D mode with dimension sliders for slicing"
-    )
-    napari_parser.add_argument(
-        "--empty-threshold", type=float, default=0.01, 
-        help="Threshold for considering voxels as empty (sum across channels, default: 0.01)"
-    )
-    napari_parser.add_argument(
-        "--clean-rendering", action="store_true", 
-        help="Use clean rendering mode to avoid pink cube (uses translucent rendering)"
-    )
-
     # Parse arguments
     args = parser.parse_args()
 
@@ -160,8 +118,6 @@ def main():
         stats_command(args)
     elif args.command == "voxelize":
         voxelize_command(args)
-    elif args.command == "view-napari":
-        view_napari_command(args)
     else:
         parser.print_help()
         sys.exit(1)
@@ -499,8 +455,8 @@ def voxelize_command(args):
         import numpy as np
         import torch
         from tqdm import tqdm
-        from frame_core.storage import VoxelLibraryWriter
-        from frame_core.voxel_grid import VoxelGrid
+        from frame_voxel.storage import VoxelLibraryWriter
+        from frame_voxel.voxel_grid import VoxelGrid
         
         structures_path = Path(args.structures_path)
         output_path = Path(args.output_path)
@@ -631,171 +587,6 @@ def voxelize_command(args):
         import traceback
         traceback.print_exc()
         sys.exit(1)
-
-
-def view_napari_command(args):
-    """Execute view-napari command."""
-    try:
-        if NapariViewer is None or VoxelLibrary is None:
-            print("Error: frame-core visualization modules not available", file=sys.stderr)
-            print("Make sure frame-core is properly installed with napari support", file=sys.stderr)
-            sys.exit(1)
-        
-        import numpy as np
-        
-        voxels_path = Path(args.voxels_path)
-        
-        if not voxels_path.exists():
-            print(f"Error: Voxels path not found: {voxels_path}", file=sys.stderr)
-            sys.exit(1)
-        
-        # Try to load as new format first, fall back to old format
-        try:
-            # Load voxel library (new format)
-            print(f"Loading voxel library from: {voxels_path}")
-            library = VoxelLibrary(str(voxels_path), mode='r')
-            
-            num_structures = len(library)
-            print(f"Found {num_structures} voxelized structures (new format)")
-            
-            # Select structure index
-            if args.index is not None:
-                if args.index < 0 or args.index >= num_structures:
-                    print(f"Error: Index {args.index} out of range [0, {num_structures-1}]", file=sys.stderr)
-                    sys.exit(1)
-                idx = args.index
-            else:
-                idx = np.random.randint(0, num_structures)
-            
-            print(f"Loading structure {idx}")
-            
-            # Load the voxel grid
-            voxel_grid = library[idx]
-            
-        except FileNotFoundError:
-            # Fall back to old format
-            print(f"New format not found, trying old format...")
-            voxel_grid = _load_old_format_voxels(voxels_path, args.index)
-        
-        print(f"Structure shape: {voxel_grid.shape}")
-        print(f"Channels: {list(voxel_grid.channels.keys())}")
-        print(f"Voxel size: {voxel_grid.voxel_size} nm")
-        
-        # Prepare channel selection
-        visible_channels = args.channels
-        if visible_channels:
-            # Validate that requested channels exist
-            available_channels = set(voxel_grid.channels.keys())
-            requested_channels = set(visible_channels)
-            missing_channels = requested_channels - available_channels
-            if missing_channels:
-                print(f"Warning: Requested channels not found: {missing_channels}", file=sys.stderr)
-                visible_channels = [ch for ch in visible_channels if ch in available_channels]
-                if not visible_channels:
-                    print("Error: No valid channels specified", file=sys.stderr)
-                    sys.exit(1)
-        
-        # Open napari viewer
-        if args.slicer:
-            print("Opening napari in 2D slicer mode...")
-            if not visible_channels:
-                visible_channels = list(voxel_grid.channels.keys())
-            
-            if len(visible_channels) > 1:
-                print(f"Warning: Slicer mode shows only one channel. Using: {visible_channels[0]}")
-            
-            viewer = NapariSlicer.view_with_sliders(
-                voxel_grid, 
-                visible_channels[0], 
-                colormap='viridis'
-            )
-        else:
-            print("Opening napari in 3D viewer mode...")
-            if args.clean_rendering:
-                print("Using clean rendering mode to avoid pink cube...")
-                viewer = NapariViewer.view_structure_clean(
-                    voxel_grid,
-                    visible_channels=visible_channels,
-                    opacity=args.opacity,
-                    empty_threshold=args.empty_threshold
-                )
-            else:
-                viewer = NapariViewer.view_structure(
-                    voxel_grid,
-                    visible_channels=visible_channels,
-                    opacity=args.opacity,
-                    rendering=args.rendering,
-                    empty_threshold=args.empty_threshold
-                )
-        
-        print("✓ Napari viewer opened!")
-        print("Close the napari window to exit.")
-        
-        # Keep the viewer open
-        import napari
-        napari.run()
-        
-    except FileNotFoundError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
-    except Exception as e:
-        print(f"Unexpected error: {e}", file=sys.stderr)
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
-
-
-def _load_old_format_voxels(voxels_path, index=None):
-    """Load voxelized structures from old format."""
-    import zarr
-    import torch
-    from frame_core.voxel_grid import VoxelGrid
-    
-    store = zarr.open(str(voxels_path), mode='r')
-    
-    # Get metadata
-    num_structures = store.attrs['num_structures']
-    num_channels = store.attrs['num_channels']
-    nz, ny, nx = store.attrs['nz'], store.attrs['ny'], store.attrs['nx']
-    
-    print(f"Found {num_structures} structures (old format)")
-    print(f"Shape: {num_structures} × {num_channels} × {nz} × {ny} × {nx}")
-    
-    # Select structure index
-    if index is not None:
-        if index < 0 or index >= num_structures:
-            raise IndexError(f"Index {index} out of range [0, {num_structures-1}]")
-        idx = index
-    else:
-        idx = np.random.randint(0, num_structures)
-    
-    print(f"Loading structure {idx}")
-    
-    # Load voxel data - shape is (num_channels, nz, ny, nx)
-    voxel_data = store['grids'][idx]  # Shape: (num_channels, nz, ny, nx)
-    
-    # Convert to torch tensor
-    voxel_tensor = torch.from_numpy(voxel_data).float()
-    
-    # Create channel mapping
-    channel_names = [
-        'shell1_head', 'shell1_tail', 'shell2_head', 'shell2_tail',
-        'payload_core', 'payload_shell_head', 'payload_shell_tail',
-        'bleb_head', 'bleb_tail'
-    ]
-    
-    # Create channel mapping for all channels
-    channels = {name: i for i, name in enumerate(channel_names[:num_channels])}
-    
-    # Create VoxelGrid
-    voxel_grid = VoxelGrid(
-        data=voxel_tensor,  # Already has channel dimension
-        voxel_size=1.0,  # Assume 1 nm voxels
-        channels=channels,
-        metadata={'structure_id': idx, 'source': str(voxels_path)}
-    )
-    
-    return voxel_grid
 
 
 def _load_structure_parameters(store, idx: int) -> Dict[str, Any]:

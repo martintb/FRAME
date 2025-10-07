@@ -1,6 +1,6 @@
 """Storage for parametric structures.
 
-Note: Voxel grid storage is handled by frame-core's VoxelLibraryWriter.
+Note: Voxel grid storage is handled by frame-voxel's VoxelLibraryWriter.
 """
 
 from pathlib import Path
