@@ -206,7 +206,10 @@ class StructureGenerator:
         accepted_voxels = []
         accepted_params = []
         
-        pbar = tqdm(total=self.config.generation.num_samples, desc="Generating structures")
+        pbar_gen = tqdm(total=self.config.generation.num_samples, desc="Generating structures", unit="accepted")
+        pbar_vox = None
+        if self.config.output.save_voxelized:
+            pbar_vox = tqdm(total=self.config.generation.num_samples, desc="Voxelizing", unit="structure", leave=False)
         
         for params in all_params:
             if len(accepted_structures) >= self.config.generation.num_samples:
@@ -233,6 +236,8 @@ class StructureGenerator:
                 try:
                     voxel_grid = self.voxelizer.voxelize(structure)
                     accepted_voxels.append(voxel_grid)
+                    if pbar_vox is not None:
+                        pbar_vox.update(1)
                 except Exception:
                     continue
             
@@ -241,9 +246,11 @@ class StructureGenerator:
             accepted_params.append(structure.parameters)
             self.validation_stats["total_accepted"] += 1
             
-            pbar.update(1)
+            pbar_gen.update(1)
         
-        pbar.close()
+        pbar_gen.close()
+        if pbar_vox is not None:
+            pbar_vox.close()
         
         return accepted_structures, accepted_voxels, accepted_params
     
@@ -279,18 +286,24 @@ class StructureGenerator:
         accepted_params = []
         
         with Pool(processes=num_workers) as pool:
-            # Track total attempts instead of accepted structures for smoother progress
-            total_attempts = len(all_params)
-            pbar = tqdm(total=total_attempts, desc="Processing structures", unit="attempt")
+            # Track accepted structures toward target to avoid oversample confusion
+            pbar_gen = tqdm(total=self.config.generation.num_samples, desc="Generating structures", unit="accepted")
+            pbar_vox = None
+            if self.config.output.save_voxelized:
+                pbar_vox = tqdm(total=self.config.generation.num_samples, desc="Voxelizing", unit="structure", leave=False)
             
             for structures, voxels, params, stats in pool.imap_unordered(worker_fn, param_chunks):
                 # Merge statistics
                 for key, count in stats.items():
                     self.validation_stats[key] += count
                 
-                # Update progress based on attempts processed
-                attempts_processed = stats.get("total_attempts", 0)
-                pbar.update(attempts_processed)
+                # Update generation progress based on number accepted in this chunk
+                accepted_in_chunk = len(structures)
+                if accepted_in_chunk:
+                    pbar_gen.update(accepted_in_chunk)
+                # Update voxelization progress if enabled (workers return voxelized tensors already)
+                if pbar_vox is not None and voxels:
+                    pbar_vox.update(len(voxels))
                 
                 # Collect accepted results
                 for i, structure in enumerate(structures):
@@ -307,7 +320,9 @@ class StructureGenerator:
                     pool.terminate()
                     break
             
-            pbar.close()
+            pbar_gen.close()
+            if pbar_vox is not None:
+                pbar_vox.close()
         
         return accepted_structures, accepted_voxels, accepted_params
 

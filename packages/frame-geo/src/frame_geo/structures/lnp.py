@@ -207,7 +207,8 @@ class LNPBuilder(StructureBuilder):
         sampling_radius = available_radius - payload_outer_r
         
         # Check if payloads can fit
-        if sampling_radius <= payload_outer_r:  # Need room for at least one diameter
+        # Allow placement when there is any positive interior radius; PDS seeds first point
+        if sampling_radius <= 0:
             return []
 
         # Poisson disc sampling in 3D sphere
@@ -215,7 +216,7 @@ class LNPBuilder(StructureBuilder):
             center=center,
             radius=sampling_radius,  # Changed from available_radius
             min_distance=2 * payload_outer_r,  # Non-overlapping
-            max_attempts=params.derived_max_payloads * 100,
+            max_attempts=max(1000, params.derived_max_payloads * 200),
         )
 
         # Build payload shells
@@ -223,6 +224,18 @@ class LNPBuilder(StructureBuilder):
         for pos in positions:
             payload = self._build_payload(params, pos)
             payloads.append(payload)
+
+        # Fallback: if packing > 0 and we found none, place one random payload inside
+        if not payloads and params.payload_packing_fraction > 0:
+            rng = np.random.default_rng()
+            direction = rng.normal(size=3)
+            norm = np.linalg.norm(direction)
+            if norm == 0:
+                direction = np.array([1.0, 0.0, 0.0])
+            else:
+                direction = direction / norm
+            pos = center + direction * (sampling_radius * 0.9)
+            payloads.append(self._build_payload(params, pos))
 
         return payloads
 

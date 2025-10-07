@@ -92,7 +92,9 @@ class PriorBuilder:
             inner_r = shell1_inner_r
 
         # Available volume (sphere)
-        available_volume = (4.0 / 3.0) * pt.pi * inner_r**3
+        # Use a small inward margin to be robust to shell discretization/placement
+        margin = pt.maximum(0.0, 0.02 * inner_r)
+        available_volume = (4.0 / 3.0) * pt.pi * (inner_r - margin) ** 3
 
         # Payload outer radius
         payload_outer_r = (

@@ -2,8 +2,8 @@
 # This demonstrates all available parameters for frame-geo
 
 [metadata]
-name = "lnp_example_generation"
-description = "Example LNP structure generation with all features"
+name = "lnp"
+description = "LNP structure generation with all features"
 random_seed = 42
 
 [structure]
@@ -24,9 +24,9 @@ dz_nm = 1.0           # Voxel size in z direction (nanometers)
 # GENERATION PARAMETERS
 # ============================================
 [generation]
-num_samples = 100              # Number of valid structures to generate
+num_samples = 1000            # Number of valid structures to generate
 parallel_workers = -1          # Number of parallel workers (-1 = auto-detect, uses CPU count - 1)
-max_retries_per_sample = 100   # Max attempts to generate a valid structure
+max_retries_per_sample = 250   # Max attempts to generate a valid structure
 
 # ============================================
 # OUTPUT CONFIGURATION
