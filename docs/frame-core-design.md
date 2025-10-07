@@ -1,4 +1,4 @@
-# FRAME-Core Design Document
+# FRAME-voxel Design Document
 
 **Version**: 1.0  
 **Date**: 2025-10-06  
@@ -8,7 +8,7 @@
 
 ## Overview
 
-`frame-core` is the foundational package for the FRAME project, providing data models, storage, I/O, and visualization tools for multi-channel 3D voxel grids representing material structures.
+`frame-voxel` is the foundational package for the FRAME project, providing data models, storage, I/O, and visualization tools for multi-channel 3D voxel grids representing material structures.
 
 ### Design Goals
 
@@ -1047,7 +1047,7 @@ for batch in loader:
 ## 9. Dependencies
 
 ```toml
-# pyproject.toml for frame-core
+# pyproject.toml for frame-voxel
 [project]
 dependencies = [
     "torch>=2.0",
@@ -1094,7 +1094,7 @@ dev = [
 ### Workflow 1: Generate Training Data
 ```python
 from frame_geo import generate_lnp_structure
-from frame_core import VoxelLibraryWriter
+from frame_voxel import VoxelLibraryWriter
 
 # Create library
 writer = VoxelLibraryWriter.create(
@@ -1115,7 +1115,7 @@ writer.finalize()
 
 ### Workflow 2: Train Diffusion Model
 ```python
-from frame_core import VoxelLibrary, VoxelDataset
+from frame_voxel import VoxelLibrary, VoxelDataset
 from frame_twin import DiffusionModel
 from torch.utils.data import DataLoader
 
@@ -1135,7 +1135,7 @@ for epoch in range(100):
 
 ### Workflow 3: Interactive Exploration
 ```python
-from frame_core import VoxelLibrary, NapariViewer
+from frame_voxel import VoxelLibrary, NapariViewer
 
 library = VoxelLibrary('lnp_training_v1')
 
