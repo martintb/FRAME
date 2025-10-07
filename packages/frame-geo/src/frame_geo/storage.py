@@ -147,7 +147,7 @@ class VoxelStorage:
             shape=batch_np.shape,
             data=batch_np,
             chunks=(1, batch_np.shape[1], 32, 32, 32),  # Chunk per structure
-            compression="blosc",
+            compressors=[zarr.codecs.BloscCodec()],
         )
 
         # Save metadata

@@ -17,7 +17,8 @@ class NapariViewer:
         visible_channels: Optional[List[str]] = None,
         colormaps: Optional[Dict[str, str]] = None,
         opacity: float = 0.5,
-        rendering: str = 'mip'
+        rendering: str = 'mip',
+        empty_threshold: float = 0.01
     ) -> napari.Viewer:
         """Open interactive napari viewer for a single structure.
         
@@ -27,11 +28,30 @@ class NapariViewer:
             colormaps: Dict mapping channel name to colormap
             opacity: Default opacity for all channels
             rendering: Rendering mode ('mip', 'translucent', 'attenuated_mip', 'minip', 'average')
+            empty_threshold: Threshold for considering voxels as empty (sum across channels)
         
         Returns:
             napari.Viewer instance
         """
         viewer = napari.Viewer(ndisplay=3)
+        
+        # Calculate empty voxels mask
+        all_data = voxel_grid.data.cpu().numpy()  # Shape: (C, D, H, W)
+        total_intensity = np.sum(all_data, axis=0)  # Sum across channels
+        empty_mask = total_intensity < empty_threshold
+        
+        # Add empty voxels as a separate layer (initially hidden)
+        if np.any(empty_mask):
+            viewer.add_image(
+                empty_mask.astype(np.float32),
+                name="Empty voxels",
+                colormap='gray',
+                blending='additive',
+                scale=(voxel_grid.voxel_size,) * 3,
+                opacity=0.1,
+                rendering=rendering,
+                visible=False  # Start hidden
+            )
         
         # Add each channel as a separate layer
         channels_to_show = visible_channels or list(voxel_grid.channels.keys())
@@ -39,17 +59,29 @@ class NapariViewer:
         for ch_name in channels_to_show:
             ch_data = voxel_grid.get_channel(ch_name).cpu().numpy()
             
+            # Mask out empty voxels to avoid the pink cube issue
+            ch_data_masked = ch_data.copy()
+            ch_data_masked[empty_mask] = 0
+            
             # Get colormap (default to viridis)
             cmap = colormaps.get(ch_name, 'viridis') if colormaps else 'viridis'
             
+            # Calculate contrast limits to hide zero values
+            non_zero_data = ch_data_masked[ch_data_masked > 0]
+            if len(non_zero_data) > 0:
+                contrast_limits = (float(np.min(non_zero_data)), float(np.max(non_zero_data)))
+            else:
+                contrast_limits = (0, 1)
+            
             viewer.add_image(
-                ch_data,
+                ch_data_masked,
                 name=ch_name,
                 colormap=cmap,
                 blending='additive',
                 scale=(voxel_grid.voxel_size,) * 3,
                 opacity=opacity,
-                rendering=rendering
+                rendering=rendering,
+                contrast_limits=contrast_limits
             )
         
         # Set camera for good initial view
@@ -118,7 +150,8 @@ class NapariViewer:
     def view_all_channels(
         voxel_grid: VoxelGrid,
         colormaps: Optional[Dict[str, str]] = None,
-        default_visible: Optional[List[str]] = None
+        default_visible: Optional[List[str]] = None,
+        empty_threshold: float = 0.01
     ) -> napari.Viewer:
         """View all channels with customizable visibility.
         
@@ -126,6 +159,7 @@ class NapariViewer:
             voxel_grid: VoxelGrid to visualize
             colormaps: Dict mapping channel name to colormap
             default_visible: List of channels to show by default (others hidden)
+            empty_threshold: Threshold for considering voxels as empty (sum across channels)
         
         Returns:
             napari.Viewer instance
@@ -134,6 +168,24 @@ class NapariViewer:
         
         if voxel_grid.channels is None:
             raise ValueError("VoxelGrid must have channel mapping")
+        
+        # Calculate empty voxels mask
+        all_data = voxel_grid.data.cpu().numpy()  # Shape: (C, D, H, W)
+        total_intensity = np.sum(all_data, axis=0)  # Sum across channels
+        empty_mask = total_intensity < empty_threshold
+        
+        # Add empty voxels as a separate layer (initially hidden)
+        if np.any(empty_mask):
+            viewer.add_image(
+                empty_mask.astype(np.float32),
+                name="Empty voxels",
+                colormap='gray',
+                blending='additive',
+                scale=(voxel_grid.voxel_size,) * 3,
+                opacity=0.1,
+                rendering='mip',
+                visible=False  # Start hidden
+            )
         
         # Default colormaps for common channel types
         default_cmaps = {
@@ -148,6 +200,10 @@ class NapariViewer:
         for ch_name in voxel_grid.channels.keys():
             ch_data = voxel_grid.get_channel(ch_name).cpu().numpy()
             
+            # Mask out empty voxels to avoid the pink cube issue
+            ch_data_masked = ch_data.copy()
+            ch_data_masked[empty_mask] = 0
+            
             # Choose colormap
             if colormaps and ch_name in colormaps:
                 cmap = colormaps[ch_name]
@@ -159,10 +215,80 @@ class NapariViewer:
                         cmap = color
                         break
             
+            # Calculate contrast limits to hide zero values
+            non_zero_data = ch_data_masked[ch_data_masked > 0]
+            if len(non_zero_data) > 0:
+                contrast_limits = (float(np.min(non_zero_data)), float(np.max(non_zero_data)))
+            else:
+                contrast_limits = (0, 1)
+            
             # Determine visibility
             visible = True
             if default_visible is not None:
                 visible = ch_name in default_visible
+            
+            viewer.add_image(
+                ch_data_masked,
+                name=ch_name,
+                colormap=cmap,
+                blending='additive',
+                scale=(voxel_grid.voxel_size,) * 3,
+                opacity=0.5,
+                rendering='mip',
+                visible=visible,
+                contrast_limits=contrast_limits
+            )
+        
+        viewer.camera.angles = (45, 45, 45)
+        viewer.camera.zoom = 2.0
+        
+        return viewer
+    
+    @staticmethod
+    def view_structure_clean(
+        voxel_grid: VoxelGrid,
+        visible_channels: Optional[List[str]] = None,
+        colormaps: Optional[Dict[str, str]] = None,
+        opacity: float = 0.5,
+        empty_threshold: float = 0.01
+    ) -> napari.Viewer:
+        """Open interactive napari viewer with clean rendering (no pink cube).
+        
+        This method uses a different approach to avoid the pink cube issue by
+        using 'translucent' rendering and proper contrast limits.
+        
+        Args:
+            voxel_grid: VoxelGrid to visualize
+            visible_channels: List of channels to show (None = all)
+            colormaps: Dict mapping channel name to colormap
+            opacity: Default opacity for all channels
+            empty_threshold: Threshold for considering voxels as empty (sum across channels)
+        
+        Returns:
+            napari.Viewer instance
+        """
+        viewer = napari.Viewer(ndisplay=3)
+        
+        # Calculate empty voxels mask
+        all_data = voxel_grid.data.cpu().numpy()  # Shape: (C, D, H, W)
+        total_intensity = np.sum(all_data, axis=0)  # Sum across channels
+        empty_mask = total_intensity < empty_threshold
+        
+        # Add each channel as a separate layer
+        channels_to_show = visible_channels or list(voxel_grid.channels.keys())
+        
+        for ch_name in channels_to_show:
+            ch_data = voxel_grid.get_channel(ch_name).cpu().numpy()
+            
+            # Get colormap (default to viridis)
+            cmap = colormaps.get(ch_name, 'viridis') if colormaps else 'viridis'
+            
+            # Calculate contrast limits to hide zero values
+            non_zero_data = ch_data[ch_data > 0]
+            if len(non_zero_data) > 0:
+                contrast_limits = (float(np.min(non_zero_data)), float(np.max(non_zero_data)))
+            else:
+                contrast_limits = (0, 1)
             
             viewer.add_image(
                 ch_data,
@@ -170,16 +296,30 @@ class NapariViewer:
                 colormap=cmap,
                 blending='additive',
                 scale=(voxel_grid.voxel_size,) * 3,
-                opacity=0.5,
-                rendering='mip',
-                visible=visible
+                opacity=opacity,
+                rendering='translucent',  # Use translucent to avoid pink cube
+                contrast_limits=contrast_limits
             )
         
+        # Add empty voxels as a separate layer (initially hidden)
+        if np.any(empty_mask):
+            viewer.add_image(
+                empty_mask.astype(np.float32),
+                name="Empty voxels",
+                colormap='gray',
+                blending='additive',
+                scale=(voxel_grid.voxel_size,) * 3,
+                opacity=0.1,
+                rendering='translucent',
+                visible=False  # Start hidden
+            )
+        
+        # Set camera for good initial view
         viewer.camera.angles = (45, 45, 45)
         viewer.camera.zoom = 2.0
         
         return viewer
-
+    
 
 class NapariSlicer:
     """Utilities for axis-aligned slicing in napari."""

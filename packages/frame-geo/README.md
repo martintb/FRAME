@@ -62,6 +62,15 @@ uv run frame-geo stats output/lnp_example/structures.zarr
 # Export statistics to CSV or JSON
 uv run frame-geo stats output/lnp_example/structures.zarr --format csv --output stats.csv
 uv run frame-geo stats output/lnp_example/structures.zarr --format json --output stats.json
+
+# Voxelize existing parametric structures using frame-core storage
+uv run frame-geo voxelize output/lnp_example/structures.zarr output/lnp_example/voxels_library
+
+# Voxelize with custom configuration and batch processing
+uv run frame-geo voxelize output/lnp_example/structures.zarr output/lnp_example/voxels_library --config examples/lnp_example_config.toml --batch-size 20
+
+# Overwrite existing voxel library
+uv run frame-geo voxelize output/lnp_example/structures.zarr output/lnp_example/voxels_library --overwrite
 ```
 
 #### Using the Python API:
@@ -298,6 +307,70 @@ Each voxel contains **volume fractions** (0.0 to 1.0) for each channel, allowing
 - **`analytical`**: Exact geometric computation (slow but accurate)
 - **`sampling`**: Monte Carlo sub-voxel sampling (fast but approximate)
 - **`hybrid`**: Analytical for simple cases, sampling for complex overlaps (recommended)
+
+### Standalone Voxelization Command
+
+The `voxelize` command converts existing parametric structures into voxelized grids using the frame-core storage format. This is useful when you want to:
+
+- Re-voxelize structures with different settings
+- Convert parametric structures to the frame-core format for use with other tools
+- Process structures that were generated with `--parametric-only`
+
+#### Usage
+
+```bash
+# Basic voxelization with default settings
+uv run frame-geo voxelize input/structures.zarr output/voxels_library
+
+# Use configuration file for voxelization settings
+uv run frame-geo voxelize input/structures.zarr output/voxels_library --config config.toml
+
+# Control batch processing
+uv run frame-geo voxelize input/structures.zarr output/voxels_library --batch-size 20
+
+# Overwrite existing output directory
+uv run frame-geo voxelize input/structures.zarr output/voxels_library --overwrite
+```
+
+#### Arguments
+
+- `structures_path`: Path to the input `structures.zarr` directory containing parametric structures
+- `output_path`: Path to the output directory where the voxel library will be created
+- `--config`: Optional path to TOML configuration file for voxelization settings
+- `--batch-size`: Number of structures to process in parallel (default: 10)
+- `--overwrite`: Overwrite existing output directory if it exists
+
+#### Output Format
+
+The voxelize command creates a frame-core compatible voxel library with:
+
+- `voxel_data.zarr/`: Compressed Zarr array containing voxel grids
+- `parameters.parquet`: Parameter table for all structures
+- `manifest.json`: Library metadata and statistics
+- `channel_info.json`: Channel name to index mapping
+
+#### Integration with frame-core
+
+The output voxel library is fully compatible with frame-core tools:
+
+```python
+from frame_core.storage import VoxelLibrary
+
+# Load the voxelized library
+library = VoxelLibrary("output/voxels_library")
+
+# Access individual structures
+grid = library[0]  # Get first structure
+print(f"Grid shape: {grid.shape}")
+print(f"Channels: {grid.channels}")
+
+# Filter by parameters
+filtered = library.filter("shell1_radius_nm > 50.0")
+
+# Use with PyTorch DataLoader
+from frame_core.dataset import VoxelDataset
+dataset = VoxelDataset(library, device='cuda')
+```
 
 ## Extending frame-geo
 
