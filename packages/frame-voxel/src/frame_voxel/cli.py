@@ -64,6 +64,14 @@ def main():
         "--clean-rendering", action="store_true", 
         help="Use clean rendering mode to avoid pink cube (uses translucent rendering)"
     )
+    napari_parser.add_argument(
+        "--argmax", action="store_true",
+        help="Show argmax across channels with different colors for each channel"
+    )
+    napari_parser.add_argument(
+        "--argmax-colormap", type=str, default="tab20",
+        help="Colormap for argmax visualization (default: tab20)"
+    )
 
     # Info command
     info_parser = subparsers.add_parser(
@@ -159,7 +167,14 @@ def view_napari_command(args):
                     sys.exit(1)
         
         # Open napari viewer
-        if args.slicer:
+        if args.argmax:
+            print("Opening napari with argmax channel visualization...")
+            viewer = NapariSlicer.view_argmax_channels(
+                voxel_grid,
+                colormap=args.argmax_colormap,
+                empty_threshold=args.empty_threshold
+            )
+        elif args.slicer:
             print("Opening napari in 2D slicer mode...")
             if not visible_channels:
                 visible_channels = list(voxel_grid.channels.keys())
@@ -199,6 +214,8 @@ def view_napari_command(args):
         print("  • Try different rendering modes: --rendering translucent")
         print("  • If you see a pink cube, try: --clean-rendering or --rendering attenuated_mip")
         print("  • Use --channels to show specific channels only")
+        print("  • Use --argmax to see which channel dominates at each voxel")
+        print("  • Use --slicer for 2D slicing with dimension sliders")
         print("\nClose the napari window to exit.")
         
         # Keep the viewer open

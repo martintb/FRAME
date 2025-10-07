@@ -398,4 +398,67 @@ class NapariSlicer:
         )
         
         return viewer
+    
+    @staticmethod
+    def view_argmax_channels(
+        voxel_grid: VoxelGrid,
+        colormap: str = 'tab20',
+        empty_threshold: float = 0.01
+    ) -> napari.Viewer:
+        """Create viewer showing argmax across channels with different colors.
+        
+        Each voxel shows the channel index with the highest value, colored
+        according to the specified colormap. This is useful for understanding
+        which material dominates at each spatial location.
+        
+        Args:
+            voxel_grid: VoxelGrid to visualize
+            colormap: Colormap to use for channel indices ('tab20', 'Set3', etc.)
+            empty_threshold: Threshold for considering voxels as empty
+        
+        Returns:
+            napari.Viewer instance with argmax visualization
+        """
+        viewer = napari.Viewer(ndisplay=2)  # Start in 2D mode for slicing
+        
+        # Get all channel data
+        all_data = voxel_grid.data.cpu().numpy()  # Shape: (C, D, H, W)
+        
+        # Calculate total intensity to identify empty voxels
+        total_intensity = np.sum(all_data, axis=0)
+        empty_mask = total_intensity < empty_threshold
+        
+        # Compute argmax across channels
+        argmax_channels = np.argmax(all_data, axis=0).astype(np.float32)
+        
+        # Set empty voxels to NaN so they appear transparent
+        argmax_channels[empty_mask] = np.nan
+        
+        # Add the argmax layer
+        layer = viewer.add_image(
+            argmax_channels,
+            name="Channel Argmax",
+            colormap=colormap,
+            scale=(voxel_grid.voxel_size,) * 3,
+            opacity=0.8,
+            blending='translucent'
+        )
+        
+        # Set contrast limits to show all channel indices
+        n_channels = len(voxel_grid.channels)
+        layer.contrast_limits = (0, n_channels - 1)
+        
+        # Add labels layer to show channel names
+        if voxel_grid.channels:
+            # Create a simple labels layer showing channel names
+            # This will be displayed in the layer list
+            channel_names = list(voxel_grid.channels.keys())
+            for i, name in enumerate(channel_names):
+                viewer.add_labels(
+                    np.zeros_like(argmax_channels, dtype=int),
+                    name=f"Channel {i}: {name}",
+                    visible=False  # Hidden by default, can be toggled
+                )
+        
+        return viewer
 

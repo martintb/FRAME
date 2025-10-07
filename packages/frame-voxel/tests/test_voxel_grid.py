@@ -190,3 +190,64 @@ class TestVoxelGridRepr:
         assert 'device=' in repr_str
         assert 'dtype=' in repr_str
 
+
+class TestArgmaxVisualization:
+    """Test argmax channel visualization functionality."""
+    
+    def test_argmax_computation(self, sample_voxel_grid):
+        """Test that argmax computation works correctly."""
+        import numpy as np
+        
+        # Get the data
+        all_data = sample_voxel_grid.data.cpu().numpy()  # Shape: (C, D, H, W)
+        
+        # Compute argmax across channels
+        argmax_channels = np.argmax(all_data, axis=0)
+        
+        # Check that argmax values are valid channel indices
+        assert argmax_channels.min() >= 0
+        assert argmax_channels.max() < sample_voxel_grid.n_channels
+        
+        # Check that argmax has the right shape (should be 3D)
+        assert argmax_channels.shape == sample_voxel_grid.grid_shape
+        
+        # Check that we get different channel indices (not all the same)
+        unique_values = np.unique(argmax_channels)
+        assert len(unique_values) > 1, "All voxels have the same argmax channel"
+    
+    def test_argmax_with_empty_voxels(self):
+        """Test argmax computation with empty voxels."""
+        import numpy as np
+        import torch
+        
+        # Create test data with some empty voxels
+        data = torch.zeros(3, 16, 16, 16)
+        
+        # Channel 0: some values in first half
+        data[0, :8, :, :] = 0.5
+        
+        # Channel 1: some values in second half  
+        data[1, 8:, :, :] = 0.3
+        
+        # Channel 2: some values in middle
+        data[2, 4:12, 4:12, 4:12] = 0.7
+        
+        # Create voxel grid
+        vg = VoxelGrid(data=data, voxel_size=1.0)
+        
+        # Compute argmax
+        all_data = vg.data.cpu().numpy()
+        argmax_channels = np.argmax(all_data, axis=0)
+        
+        # Check that empty regions (where all channels are 0) have argmax=0
+        # (since argmax of [0,0,0] is 0)
+        empty_regions = np.all(all_data == 0, axis=0)
+        assert np.all(argmax_channels[empty_regions] == 0)
+        
+        # Check that non-empty regions have appropriate argmax values
+        non_empty = ~empty_regions
+        if np.any(non_empty):
+            non_empty_argmax = argmax_channels[non_empty]
+            assert np.all(non_empty_argmax >= 0)
+            assert np.all(non_empty_argmax < 3)
+
