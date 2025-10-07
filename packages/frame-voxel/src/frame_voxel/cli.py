@@ -1,6 +1,7 @@
 """Command-line interface for frame-voxel."""
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from typing import Optional
@@ -44,9 +45,13 @@ def main():
         "--opacity", type=float, default=0.5, help="Default opacity for all channels (default: 0.5)"
     )
     napari_parser.add_argument(
-        "--rendering", type=str, default="mip", 
+        "--rendering", type=str, default="attenuated_mip", 
         choices=["mip", "translucent", "attenuated_mip", "minip", "average"],
-        help="Rendering mode (default: mip)"
+        help="Rendering mode (default: attenuated_mip)"
+    )
+    napari_parser.add_argument(
+        "--max-channels", type=int, default=12,
+        help="Maximum number of channels to display (ranked by non-zero voxels)"
     )
     napari_parser.add_argument(
         "--slicer", action="store_true", help="Open in 2D mode with dimension sliders for slicing"
@@ -114,6 +119,9 @@ def view_napari_command(args):
                 idx = args.index
             else:
                 idx = np.random.randint(0, num_structures)
+                random_selection = True
+            if args.index is not None:
+                random_selection = False
             
             print(f"Loading structure {idx}")
             
@@ -128,6 +136,13 @@ def view_napari_command(args):
         print(f"Structure shape: {voxel_grid.shape}")
         print(f"Channels: {list(voxel_grid.channels.keys())}")
         print(f"Voxel size: {voxel_grid.voxel_size} nm")
+        # Print parameter details if randomly selected (or if metadata present)
+        try:
+            params = getattr(voxel_grid, 'metadata', {}) or {}
+            print("\nSelected structure parameters:")
+            print(json.dumps(params, indent=2, sort_keys=True))
+        except Exception:
+            pass
         
         # Prepare channel selection
         visible_channels = args.channels
@@ -173,11 +188,18 @@ def view_napari_command(args):
                     visible_channels=visible_channels,
                     opacity=args.opacity,
                     rendering=args.rendering,
-                    empty_threshold=args.empty_threshold
+                    empty_threshold=args.empty_threshold,
+                    max_channels=args.max_channels
                 )
         
         print("✓ Napari viewer opened!")
-        print("Close the napari window to exit.")
+        print("\nTips for better visualization:")
+        print("  • Use the layer controls (left panel) to toggle channels on/off")
+        print("  • Adjust opacity and contrast using the layer controls")
+        print("  • Try different rendering modes: --rendering translucent")
+        print("  • If you see a pink cube, try: --clean-rendering or --rendering attenuated_mip")
+        print("  • Use --channels to show specific channels only")
+        print("\nClose the napari window to exit.")
         
         # Keep the viewer open
         import napari
