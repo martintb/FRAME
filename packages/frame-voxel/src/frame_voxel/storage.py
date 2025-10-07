@@ -242,6 +242,7 @@ class VoxelLibraryWriter:
         self.path = path
         self._parameter_buffer: List[Dict[str, Any]] = []
         self._zarr_array: Optional[zarr.Array] = None
+        self._parameter_buffer_size: int = 1000  # Configurable buffer size
     
     @staticmethod
     def create(
@@ -335,6 +336,34 @@ class VoxelLibraryWriter:
         
         # Accumulate parameters for batch write
         self._parameter_buffer.append({'structure_id': idx, **parameters})
+        
+        # Auto-flush if buffer is full
+        if len(self._parameter_buffer) >= self._parameter_buffer_size:
+            self.flush_parameters()
+
+    def flush_parameters(self):
+        """Flush parameter buffer to disk."""
+        if not self._parameter_buffer:
+            return
+            
+        # Write parameters to parquet (append mode)
+        param_path = self.path / 'parameters.parquet'
+        
+        if param_path.exists():
+            # Append to existing file
+            existing_df = pd.read_parquet(param_path)
+            new_df = pd.DataFrame(self._parameter_buffer)
+            combined_df = pd.concat([existing_df, new_df], ignore_index=True)
+            combined_df = combined_df.sort_values('structure_id')  # Keep sorted
+            combined_df.to_parquet(param_path, index=False)
+        else:
+            # Create new file
+            df = pd.DataFrame(self._parameter_buffer)
+            df = df.sort_values('structure_id')
+            df.to_parquet(param_path, index=False)
+        
+        # Clear buffer
+        self._parameter_buffer.clear()
     
     def finalize(self, compute_statistics: bool = True):
         """Write parameter table and finalize library.
@@ -342,11 +371,8 @@ class VoxelLibraryWriter:
         Args:
             compute_statistics: Whether to compute and store library statistics
         """
-        # Write all parameters to parquet
-        if self._parameter_buffer:
-            df = pd.DataFrame(self._parameter_buffer)
-            df = df.sort_values('structure_id')  # Ensure sorted by index
-            df.to_parquet(self.path / 'parameters.parquet', index=False)
+        # Flush any remaining parameters
+        self.flush_parameters()
         
         # Update manifest with statistics if requested
         if compute_statistics:

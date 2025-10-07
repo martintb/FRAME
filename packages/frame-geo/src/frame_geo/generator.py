@@ -23,7 +23,7 @@ from frame_voxel.voxel_grid import VoxelGrid
 from frame_voxel.storage import VoxelLibraryWriter
 
 
-def _process_structure_batch(params_batch, config_dict, structure_type, validation_config, voxelization_config, save_voxelized):
+def _process_structure_batch(params_batch, config_dict, structure_type, validation_config, voxelization_config, save_voxelized, save_parametric):
     """Worker function to process a batch of parameter sets.
     
     This function is designed to be called by multiprocessing workers.
@@ -35,6 +35,7 @@ def _process_structure_batch(params_batch, config_dict, structure_type, validati
         validation_config: Validation configuration
         voxelization_config: Voxelization configuration
         save_voxelized: Whether to voxelize structures
+        save_parametric: Whether to save parametric structures
         
     Returns:
         Tuple of (accepted_structures, accepted_voxels, accepted_params, stats_dict)
@@ -52,6 +53,7 @@ def _process_structure_batch(params_batch, config_dict, structure_type, validati
     validators = get_validators(structure_type, validation_config)
     
     # Initialize voxelizer if needed
+    voxelizer = None
     if save_voxelized:
         channel_map = voxelization_config.get("channels", {})
         voxelizer = HybridVoxelizer(grid_config, channel_map)
@@ -90,14 +92,15 @@ def _process_structure_batch(params_batch, config_dict, structure_type, validati
         
         # Voxelize if enabled
         voxel_grid = None
-        if save_voxelized:
+        if save_voxelized and voxelizer:
             try:
                 voxel_grid = voxelizer.voxelize(structure)
             except Exception:
                 continue
         
-        # Accept
-        accepted_structures.append(structure)
+        # Accept structures based on flags
+        if save_parametric:
+            accepted_structures.append(structure)
         if voxel_grid is not None:
             accepted_voxels.append(voxel_grid)
         accepted_params.append(structure.parameters)
@@ -126,6 +129,7 @@ class StructureGenerator:
 
         # Storage
         self.parametric_storage = ParametricStorage(config.output.base_path)
+        self.voxel_writer = None
 
         # Statistics tracking
         self.validation_stats = {name: 0 for name in self.validators.keys()}
@@ -185,26 +189,57 @@ class StructureGenerator:
 
         print(f"Using {num_workers} parallel workers...")
 
+        # Initialize storage writers
+        if self.config.output.save_parametric:
+            print("Initializing parametric storage...")
+            self.parametric_storage.create_empty(self.config.generation.num_samples)
+        
+        if self.config.output.save_voxelized:
+            print("Initializing voxel storage...")
+            output_path = Path(self.config.output.base_path)
+            library_path = output_path / "voxels.zarr"
+            
+            # Get grid shape and channel info
+            n_channels = len(self.config.voxelization.get("channels", {}))
+            voxel_shape = (self.config.grid.nz, self.config.grid.ny, self.config.grid.nx)
+            channel_map = self.config.voxelization.get("channels", {})
+            
+            self.voxel_writer = VoxelLibraryWriter.create(
+                path=library_path,
+                n_structures=self.config.generation.num_samples,
+                voxel_shape=voxel_shape,
+                n_channels=n_channels,
+                channel_names=channel_map,
+                voxel_size_nm=self.config.grid.dx_nm,
+                structure_type=self.config.structure_type
+            )
+
         # Process structures
         if num_workers == 1:
             # Sequential processing
-            accepted_structures, accepted_voxels, accepted_params = self._generate_sequential(all_params)
+            self._generate_sequential(all_params)
         else:
             # Parallel processing
-            accepted_structures, accepted_voxels, accepted_params = self._generate_parallel(all_params, num_workers)
+            self._generate_parallel(all_params, num_workers)
 
-        # Save outputs
-        print("\nSaving outputs...")
-        self._save_outputs(accepted_structures, accepted_voxels, accepted_params)
+        # Finalize storage
+        print("\nFinalizing storage...")
+        if self.voxel_writer:
+            self.voxel_writer.finalize(compute_statistics=True)
+
+        # Save metadata
+        self._save_metadata()
 
         # Print summary
         self._print_summary()
     
     def _generate_sequential(self, all_params):
-        """Sequential generation (original implementation)."""
-        accepted_structures = []
-        accepted_voxels = []
-        accepted_params = []
+        """Sequential generation with streaming writes."""
+        # Buffers for batch writing
+        structure_buffer = []
+        voxel_buffer = []
+        param_buffer = []
+        global_idx = 0
         
         pbar_gen = tqdm(total=self.config.generation.num_samples, desc="Generating structures", unit="accepted")
         pbar_vox = None
@@ -212,7 +247,7 @@ class StructureGenerator:
             pbar_vox = tqdm(total=self.config.generation.num_samples, desc="Voxelizing", unit="structure", leave=False)
         
         for params in all_params:
-            if len(accepted_structures) >= self.config.generation.num_samples:
+            if global_idx >= self.config.generation.num_samples:
                 break
             
             self.validation_stats["total_attempts"] += 1
@@ -232,30 +267,46 @@ class StructureGenerator:
                 continue
             
             # Voxelize (if enabled)
+            voxel_grid = None
             if self.config.output.save_voxelized:
                 try:
                     voxel_grid = self.voxelizer.voxelize(structure)
-                    accepted_voxels.append(voxel_grid)
                     if pbar_vox is not None:
                         pbar_vox.update(1)
                 except Exception:
                     continue
             
-            # Accept
-            accepted_structures.append(structure)
-            accepted_params.append(structure.parameters)
+            # Add to buffers
+            if self.config.output.save_parametric:
+                structure_buffer.append(structure)
+            if voxel_grid is not None:
+                voxel_buffer.append(voxel_grid)
+            param_buffer.append(structure.parameters)
+            
             self.validation_stats["total_accepted"] += 1
+            global_idx += 1
+            
+            # Flush when buffer is full
+            if len(structure_buffer) >= self.config.generation.flush_batch_size:
+                start_idx = global_idx - len(structure_buffer)
+                self._flush_batch(structure_buffer, voxel_buffer, param_buffer, start_idx)
+                structure_buffer.clear()
+                voxel_buffer.clear()
+                param_buffer.clear()
             
             pbar_gen.update(1)
+        
+        # Flush remaining
+        if structure_buffer:
+            start_idx = global_idx - len(structure_buffer)
+            self._flush_batch(structure_buffer, voxel_buffer, param_buffer, start_idx)
         
         pbar_gen.close()
         if pbar_vox is not None:
             pbar_vox.close()
-        
-        return accepted_structures, accepted_voxels, accepted_params
     
     def _generate_parallel(self, all_params, num_workers):
-        """Parallel generation using multiprocessing."""
+        """Parallel generation with streaming writes."""
         # Serialize configuration for workers
         grid_dict = {
             "nx": self.config.grid.nx,
@@ -278,12 +329,14 @@ class StructureGenerator:
             validation_config=self.config.validation,
             voxelization_config=self.config.voxelization,
             save_voxelized=self.config.output.save_voxelized,
+            save_parametric=self.config.output.save_parametric,
         )
         
-        # Process in parallel with progress bar
-        accepted_structures = []
-        accepted_voxels = []
-        accepted_params = []
+        # Buffers for batch writing
+        structure_buffer = []
+        voxel_buffer = []
+        param_buffer = []
+        global_idx = 0
         
         with Pool(processes=num_workers) as pool:
             # Track accepted structures toward target to avoid oversample confusion
@@ -297,34 +350,49 @@ class StructureGenerator:
                 for key, count in stats.items():
                     self.validation_stats[key] += count
                 
-                # Update generation progress based on number accepted in this chunk
+                # Process each structure in the chunk
+                for i, structure in enumerate(structures):
+                    if global_idx >= self.config.generation.num_samples:
+                        pool.terminate()
+                        break
+                    
+                    # Add to buffers
+                    if self.config.output.save_parametric:
+                        structure_buffer.append(structure)
+                    if i < len(voxels):
+                        voxel_buffer.append(voxels[i])
+                    param_buffer.append(params[i])
+                    
+                    global_idx += 1
+                    
+                    # Flush when buffer is full
+                    if len(structure_buffer) >= self.config.generation.flush_batch_size:
+                        start_idx = global_idx - len(structure_buffer)
+                        self._flush_batch(structure_buffer, voxel_buffer, param_buffer, start_idx)
+                        structure_buffer.clear()
+                        voxel_buffer.clear()
+                        param_buffer.clear()
+                
+                # Update progress bars
                 accepted_in_chunk = len(structures)
                 if accepted_in_chunk:
                     pbar_gen.update(accepted_in_chunk)
-                # Update voxelization progress if enabled (workers return voxelized tensors already)
                 if pbar_vox is not None and voxels:
                     pbar_vox.update(len(voxels))
                 
-                # Collect accepted results
-                for i, structure in enumerate(structures):
-                    if len(accepted_structures) >= self.config.generation.num_samples:
-                        break
-                    
-                    accepted_structures.append(structure)
-                    accepted_params.append(params[i])
-                    if i < len(voxels):
-                        accepted_voxels.append(voxels[i])
-                
                 # Early exit if we have enough
-                if len(accepted_structures) >= self.config.generation.num_samples:
+                if global_idx >= self.config.generation.num_samples:
                     pool.terminate()
                     break
+            
+            # Flush remaining
+            if structure_buffer:
+                start_idx = global_idx - len(structure_buffer)
+                self._flush_batch(structure_buffer, voxel_buffer, param_buffer, start_idx)
             
             pbar_gen.close()
             if pbar_vox is not None:
                 pbar_vox.close()
-        
-        return accepted_structures, accepted_voxels, accepted_params
 
     def _validate(self, structure) -> tuple[bool, str]:
         """Run all validators.
@@ -341,51 +409,53 @@ class StructureGenerator:
                 return False, name
         return True, ""
 
-    def _save_outputs(self, structures, voxels, params) -> None:
-        """Save all outputs to disk."""
-        output_path = Path(self.config.output.base_path)
-
-        # Save parametric structures
+    def _flush_batch(self, structures, voxels, params, start_index):
+        """Flush a batch of structures to disk.
+        
+        Args:
+            structures: List of parametric structures
+            voxels: List of voxel grids
+            params: List of parameter objects
+            start_index: Starting index for this batch
+        """
+        # Write parametric structures
         if self.config.output.save_parametric and structures:
-            print("Saving parametric structures...")
-            self.parametric_storage.save_batch(structures)
-
-        # Save voxelized grids
-        if self.config.output.save_voxelized and voxels:
-            print("Saving voxel grids...")
-            self._save_voxel_library(voxels, params)
-
-        # Save parameters CSV
-        if params:
-            print("Saving parameters CSV...")
-            param_dicts = []
-            for p in params:
+            self.parametric_storage.append_structures(structures, start_index)
+        
+        # Write voxel structures
+        if self.config.output.save_voxelized and voxels and self.voxel_writer:
+            for i, (voxel_tensor, param) in enumerate(zip(voxels, params)):
+                global_idx = start_index + i
+                
+                # Convert tensor to VoxelGrid
+                voxel_grid = VoxelGrid(
+                    data=voxel_tensor,
+                    voxel_size=self.config.grid.dx_nm,
+                    channels=self.config.voxelization.get("channels", {}),
+                    metadata={}
+                )
+                
+                # Convert parameters to dict
                 param_dict = {
-                    "shell1_radius_nm": p.shell1_radius_nm,
-                    "shell1_head_thickness_nm": p.shell1_head_thickness_nm,
-                    "shell1_tail_thickness_nm": p.shell1_tail_thickness_nm,
-                    "shell2_probability": p.shell2_probability,
-                    "actual_num_payloads": p.actual_num_payloads,
-                    "actual_num_blebs": p.actual_num_blebs,
-                    # Add more fields as needed
+                    "shell1_radius_nm": param.shell1_radius_nm,
+                    "shell1_head_thickness_nm": param.shell1_head_thickness_nm,
+                    "shell1_tail_thickness_nm": param.shell1_tail_thickness_nm,
+                    "shell2_probability": param.shell2_probability,
+                    "actual_num_payloads": param.actual_num_payloads,
+                    "actual_num_blebs": param.actual_num_blebs,
                 }
-                param_dicts.append(param_dict)
+                
+                self.voxel_writer.add_structure(global_idx, voxel_grid, param_dict)
 
-            df = pd.DataFrame(param_dicts)
-            df.to_csv(output_path / "parameters.csv", index=False)
+    def _save_metadata(self) -> None:
+        """Save metadata files (validation logs, statistics, config)."""
+        output_path = Path(self.config.output.base_path)
 
         # Save validation logs
         if self.config.output.save_validation_logs:
             print("Saving validation logs...")
             with open(output_path / "validation_log.json", "w") as f:
                 json.dump(self.validation_stats, f, indent=2)
-
-        # Compute and save statistics
-        if self.config.output.save_statistics and params:
-            print("Computing statistics...")
-            stats = compute_statistics(params)
-            with open(output_path / "statistics.json", "w") as f:
-                json.dump(stats, f, indent=2)
 
         # Save copy of config
         config_copy_path = output_path / "config.toml"
@@ -407,64 +477,6 @@ class StructureGenerator:
         with open(output_path / "config.json", "w") as f:
             json.dump(config_dict, f, indent=2)
 
-        # Generate visualizations if enabled
-        if hasattr(self.config, 'visualization') and self.config.visualization and self.config.visualization.get('enabled', False):
-            if self.config.visualization.get('generate_on_completion', False) and structures:
-                print("Generating visualizations...")
-                self._generate_visualizations(structures)
-
-    def _save_voxel_library(self, voxels, params) -> None:
-        """Save voxel grids using frame-voxel VoxelLibraryWriter.
-        
-        Args:
-            voxels: List of voxel grid tensors (each is [C, Z, Y, X])
-            params: List of parameter objects
-        """
-        output_path = Path(self.config.output.base_path)
-        library_path = output_path / "voxels.zarr"
-        
-        # Get grid shape and channel info from first voxel
-        first_voxel = voxels[0]
-        n_channels, nz, ny, nx = first_voxel.shape
-        
-        # Get channel mapping from voxelizer
-        channel_map = self.config.voxelization.get("channels", {})
-        
-        # Create the voxel library
-        writer = VoxelLibraryWriter.create(
-            path=library_path,
-            n_structures=len(voxels),
-            voxel_shape=(nz, ny, nx),
-            n_channels=n_channels,
-            channel_names=channel_map,
-            voxel_size_nm=self.config.grid.dx_nm,
-            structure_type=self.config.structure_type
-        )
-        
-        # Add each structure
-        for i, (voxel_tensor, param) in enumerate(zip(voxels, params)):
-            # Convert tensor to VoxelGrid
-            voxel_grid = VoxelGrid(
-                data=voxel_tensor,
-                voxel_size=self.config.grid.dx_nm,
-                channels=channel_map,
-                metadata={}
-            )
-            
-            # Convert parameters to dict
-            param_dict = {
-                "shell1_radius_nm": param.shell1_radius_nm,
-                "shell1_head_thickness_nm": param.shell1_head_thickness_nm,
-                "shell1_tail_thickness_nm": param.shell1_tail_thickness_nm,
-                "shell2_probability": param.shell2_probability,
-                "actual_num_payloads": param.actual_num_payloads,
-                "actual_num_blebs": param.actual_num_blebs,
-            }
-            
-            writer.add_structure(i, voxel_grid, param_dict)
-        
-        # Finalize the library
-        writer.finalize(compute_statistics=True)
 
     def _generate_visualizations(self, structures) -> None:
         """Generate visualizations for a subset of structures."""

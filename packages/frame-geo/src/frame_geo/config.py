@@ -37,6 +37,7 @@ class GenerationConfig:
     num_samples: int
     parallel_workers: int = 1
     max_retries_per_sample: int = 100
+    flush_batch_size: int = 100
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "GenerationConfig":
@@ -45,6 +46,7 @@ class GenerationConfig:
             num_samples=data["num_samples"],
             parallel_workers=data.get("parallel_workers", 1),
             max_retries_per_sample=data.get("max_retries_per_sample", 100),
+            flush_batch_size=data.get("flush_batch_size", 100),
         )
 
 
