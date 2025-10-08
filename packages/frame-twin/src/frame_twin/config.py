@@ -36,16 +36,15 @@ class VAEModelConfig(BaseModel):
     """VAE model configuration."""
     type: Literal["vae"] = "vae"
     input_channels: int = Field(gt=0)
-    latent_dim: int = Field(gt=0)
-    latent_spatial_size: List[int] = Field(min_items=3, max_items=3)
-    encoder_channels: List[int]
-    decoder_channels: List[int]
+    latent_channels: int = Field(gt=0)
+    base_channels: int = Field(gt=0)
+    levels: int = Field(gt=0, le=6)  # Max 6 levels to avoid too much compression
     
-    @validator('latent_spatial_size')
-    def validate_spatial_size(cls, v):
-        """Ensure all spatial dimensions are positive."""
-        if any(dim <= 0 for dim in v):
-            raise ValueError("All latent spatial dimensions must be positive")
+    @validator('levels')
+    def validate_levels(cls, v):
+        """Ensure levels is reasonable for 128x128x128 input."""
+        if v > 6:
+            raise ValueError("levels must be <= 6 to avoid over-compression of 128x128x128 input")
         return v
 
 
@@ -82,13 +81,14 @@ class DDPMModelConfig(BaseModel):
 
 class TrainingConfig(BaseModel):
     """Training configuration."""
-    device: Literal["cuda", "cpu"] = "cuda"
+    device: Literal["cuda", "cpu", "mps"] = "cuda"
     distributed: bool = False
     num_epochs: int = Field(gt=0)
     batch_size: int = Field(gt=0)
     learning_rate: float = Field(gt=0.0)
     optimizer: Literal["adam", "adamw", "sgd"] = "adam"
     scheduler: Literal["cosine", "step", "none"] = "cosine"
+    num_workers: int = Field(ge=0)
     
     # Scheduler-specific parameters
     scheduler_params: Optional[Dict] = None

@@ -2,7 +2,7 @@
 # This demonstrates all available parameters for frame-geo
 
 [metadata]
-name = "lnp"
+name = "lnp_5k"
 description = "LNP structure generation with all features"
 random_seed = 42
 
@@ -24,7 +24,7 @@ dz_nm = 1.0           # Voxel size in z direction (nanometers)
 # GENERATION PARAMETERS
 # ============================================
 [generation]
-num_samples = 50000            # Number of valid structures to generate
+num_samples = 5000            # Number of valid structures to generate
 parallel_workers = 1          # Number of parallel workers (-1 = auto-detect, uses CPU count - 1)
 max_retries_per_sample = 250   # Max attempts to generate a valid structure
 flush_batch_size = 1000         # Write to disk every N structures (memory efficiency)
@@ -33,7 +33,7 @@ flush_batch_size = 1000         # Write to disk every N structures (memory effic
 # OUTPUT CONFIGURATION
 # ============================================
 [output]
-base_path = "./output/lnp"
+base_path = "./output/lnp_5k"
 mode = "overwrite"             # "overwrite" or "append"
 save_parametric = true         # Save parametric representations
 save_voxelized = true          # Save voxelized grids

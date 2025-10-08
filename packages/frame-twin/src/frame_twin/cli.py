@@ -71,12 +71,20 @@ def train_vae(config_path: str, resume_checkpoint: Optional[str] = None):
     )
     
     print("Creating data loaders...")
-    train_loader, val_loader, _ = create_data_loaders(
+    # Don't pre-load to device - let the trainer handle device transfer in main process
+    # For MPS, set num_workers=0 in config to avoid worker process memory issues
+    pin_memory = config.training.device == "cuda"
+    
+    loaders = create_data_loaders(
         voxel_library=voxel_library,
         data_splits=data_splits,
         batch_size=config.training.batch_size,
-        device=torch.device(config.training.device)
+        device=None,  # Don't pre-load to device
+        num_workers=config.training.num_workers,
+        pin_memory=pin_memory
     )
+    train_loader = loaders['train']
+    val_loader = loaders['val']
     
     print("Initializing VAE trainer...")
     trainer = VAETrainer(config)
@@ -116,12 +124,20 @@ def train_ddpm(config_path: str, resume_checkpoint: Optional[str] = None):
     )
     
     print("Creating data loaders...")
-    train_loader, val_loader, _ = create_data_loaders(
+    # Don't pre-load to device - let the trainer handle device transfer in main process
+    # For MPS, set num_workers=0 in config to avoid worker process memory issues
+    pin_memory = config.training.device == "cuda"
+    
+    loaders = create_data_loaders(
         voxel_library=voxel_library,
         data_splits=data_splits,
         batch_size=config.training.batch_size,
-        device=torch.device(config.training.device)
+        device=None,  # Don't pre-load to device
+        num_workers=config.training.num_workers,
+        pin_memory=pin_memory
     )
+    train_loader = loaders['train']
+    val_loader = loaders['val']
     
     print("Initializing DDPM trainer...")
     from .training import DDPMTrainer

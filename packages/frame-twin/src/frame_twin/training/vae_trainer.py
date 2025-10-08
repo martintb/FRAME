@@ -18,10 +18,9 @@ class VAETrainer(BaseTrainer):
         from ..models import VAE
         model = VAE(
             input_channels=config.model.input_channels,
-            latent_dim=config.model.latent_dim,
-            latent_spatial_size=tuple(config.model.latent_spatial_size),
-            encoder_channels=config.model.encoder_channels,
-            decoder_channels=config.model.decoder_channels
+            latent_channels=config.model.latent_channels,
+            base_channels=config.model.base_channels,
+            levels=config.model.levels
         )
         
         # Create loss function
@@ -98,10 +97,10 @@ class VAETrainer(BaseTrainer):
         voxels = batch['voxels']  # Shape: (B, C, D, H, W)
         
         # Forward pass
-        x_recon, mean, logvar = self.model(voxels)
+        x_recon, z, mu, logvar = self.model(voxels)
         
         # Compute loss
-        total_loss, recon_loss, kl_loss = self.loss_fn(x_recon, voxels, mean, logvar)
+        total_loss, recon_loss, kl_loss = self.loss_fn(x_recon, voxels, mu, logvar)
         
         # Metrics
         metrics = {

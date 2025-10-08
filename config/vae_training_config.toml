@@ -17,15 +17,16 @@ test_ratio = 0.1
 [model]
 type = "vae"
 input_channels = 9  # Number of material channels
-latent_channels = 32  # Latent space dimension
-base_channels = 64  # Base number of channels (doubles each level)
+latent_channels = 8  # Small latent space dimension
+base_channels = 32  # Base number of channels (doubles each level)
 levels = 4  # Number of downsampling levels (128³ → 8³ latent)
 
 [training]
-device = "cuda"  # or "cpu"
+device = "mps"  # or "cpu"
 distributed = false  # Set true for DDP
 num_epochs = 100
-batch_size = 16
+num_workers = 0
+batch_size = 1
 learning_rate = 1e-4
 optimizer = "adam"  # "adam", "adamw", or "sgd"
 scheduler = "cosine"  # "cosine", "step", or "none"
@@ -43,4 +44,4 @@ save_best = true  # Save best validation loss
 
 [logging]
 log_every_steps = 50
-tensorboard_dir = "./logs/vae"
+tensorboard_dir = "./output/lnp/logs/vae"

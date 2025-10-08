@@ -101,6 +101,13 @@ class BaseTrainer:
                 'loss': f"{loss.item():.4f}",
                 'lr': f"{self.optimizer.param_groups[0]['lr']:.2e}"
             })
+            
+            # Explicitly free memory to prevent accumulation
+            del loss, batch
+            if self.device.type == 'mps':
+                torch.mps.empty_cache()
+            elif self.device.type == 'cuda':
+                torch.cuda.empty_cache()
         
         # Average metrics
         epoch_metrics['train_loss'] /= epoch_metrics['num_batches']
@@ -127,6 +134,13 @@ class BaseTrainer:
                 # Update metrics
                 epoch_metrics['val_loss'] += loss.item()
                 epoch_metrics['num_batches'] += 1
+                
+                # Explicitly free memory
+                del loss, batch
+                if self.device.type == 'mps':
+                    torch.mps.empty_cache()
+                elif self.device.type == 'cuda':
+                    torch.cuda.empty_cache()
         
         # Average metrics
         epoch_metrics['val_loss'] /= epoch_metrics['num_batches']
@@ -176,10 +190,23 @@ class BaseTrainer:
     def _move_batch_to_device(self, batch: Dict[str, Any]) -> Dict[str, Any]:
         """Move batch to device."""
         if isinstance(batch, dict):
-            return {k: v.to(self.device) if isinstance(v, torch.Tensor) else v 
-                   for k, v in batch.items()}
+            result = {}
+            for k, v in batch.items():
+                if isinstance(v, torch.Tensor):
+                    result[k] = v.to(self.device)
+                elif isinstance(v, list) and len(v) > 0 and isinstance(v[0], torch.Tensor):
+                    # Handle lists of tensors (like parameters)
+                    result[k] = [tensor.to(self.device) for tensor in v]
+                else:
+                    # Keep non-tensor values as-is (like parameter dicts)
+                    result[k] = v
+            return result
         else:
-            return batch.to(self.device)
+            # This should not happen with our data loader, but handle it gracefully
+            if hasattr(batch, 'to'):
+                return batch.to(self.device)
+            else:
+                return batch
     
     def _compute_loss(self, batch: Dict[str, Any]) -> tuple[torch.Tensor, Dict[str, float]]:
         """Compute loss for a batch. To be implemented by subclasses."""
