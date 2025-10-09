@@ -40,8 +40,9 @@ def main():
     validate_vae_parser = subparsers.add_parser('validate-vae', help='Validate VAE reconstruction with side-by-side visualization')
     validate_vae_parser.add_argument('checkpoint', help='Path to VAE checkpoint')
     validate_vae_parser.add_argument('voxel_library', help='Path to voxel library')
-    validate_vae_parser.add_argument('--structure-id', type=int, default=0, help='Structure ID to validate (default: 0)')
-    validate_vae_parser.add_argument('--channel', default='shell1_head', help='Channel to visualize (default: shell1_head)')
+    validate_vae_parser.add_argument('--structure-id', type=int, default=None, help='Structure ID to validate (default: random)')
+    validate_vae_parser.add_argument('--random', action='store_true', help='Use random structure ID (default behavior)')
+    # Note: channel, all-channels, and slicing-mode arguments removed since we now show all channels by default
     validate_vae_parser.add_argument('--device', default='auto', help='Device to use (auto, cpu, cuda, mps)')
     
     args = parser.parse_args()
@@ -55,11 +56,15 @@ def main():
     elif args.command == 'evaluate':
         evaluate_model(args.config, args.checkpoint)
     elif args.command == 'validate-vae':
+        # Determine structure_id: use provided value, or random if not specified
+        structure_id = args.structure_id
+        if structure_id is None:
+            structure_id = 'random'  # Will be handled in the function
+        
         validate_vae_reconstruction(
             checkpoint_path=args.checkpoint,
             voxel_library_path=args.voxel_library,
-            structure_id=args.structure_id,
-            channel=args.channel,
+            structure_id=structure_id,
             device=args.device
         )
     else:
@@ -71,6 +76,16 @@ def train_vae(config_path: str, resume_checkpoint: Optional[str] = None):
     """Train VAE model."""
     print(f"Loading VAE config from {config_path}")
     config = VAEConfig.from_toml(config_path)
+    
+    # Save config TOML to output directory
+    output_dir = Path(config.checkpointing.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    config_toml_path = output_dir / "config.toml"
+    
+    # Copy the original config file to the output directory
+    import shutil
+    shutil.copy2(config_path, config_toml_path)
+    print(f"Saved config to {config_toml_path}")
     
     print(f"Loading voxel library from {config.data.voxel_library_path}")
     voxel_library = VoxelLibrary(config.data.voxel_library_path)
@@ -124,6 +139,16 @@ def train_ddpm(config_path: str, resume_checkpoint: Optional[str] = None):
     """Train DDPM model."""
     print(f"Loading DDPM config from {config_path}")
     config = DDPMConfig.from_toml(config_path)
+    
+    # Save config TOML to output directory
+    output_dir = Path(config.checkpointing.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    config_toml_path = output_dir / "config.toml"
+    
+    # Copy the original config file to the output directory
+    import shutil
+    shutil.copy2(config_path, config_toml_path)
+    print(f"Saved config to {config_toml_path}")
     
     print(f"Loading voxel library from {config.data.voxel_library_path}")
     voxel_library = VoxelLibrary(config.data.voxel_library_path)
@@ -216,14 +241,47 @@ def evaluate_model(config_path: str, checkpoint_path: str):
 def validate_vae_reconstruction(
     checkpoint_path: str,
     voxel_library_path: str,
-    structure_id: int = 0,
-    channel: str = 'shell1_head',
+    structure_id = 0,  # Can be int or 'random'
     device: str = 'auto'
 ):
-    """Validate VAE reconstruction with side-by-side napari visualization."""
+    """Validate VAE reconstruction with two separate napari windows."""
     print(f"Loading VAE checkpoint from {checkpoint_path}")
     print(f"Loading voxel library from {voxel_library_path}")
-    print(f"Validating structure ID {structure_id}, channel '{channel}'")
+    
+    # Load voxel library first to get the size
+    voxel_library = VoxelLibrary(voxel_library_path)
+    num_structures = len(voxel_library)
+    print(f"Voxel library contains {num_structures} structures")
+    
+    # Handle structure_id selection
+    if structure_id == 'random':
+        import random
+        structure_id = random.randint(0, num_structures - 1)
+        print(f"Randomly selected structure ID: {structure_id}")
+    else:
+        print(f"Using specified structure ID: {structure_id}")
+    
+    # Validate structure_id is in range
+    if structure_id >= num_structures:
+        print(f"Error: Structure ID {structure_id} is out of range. Library has {num_structures} structures.")
+        return
+    
+    # Offer interactive selection
+    print(f"\nAvailable structure IDs: 0 to {num_structures - 1}")
+    print(f"Current selection: {structure_id}")
+    try:
+        user_input = input("Enter a different structure ID (or press Enter to continue): ").strip()
+        if user_input:
+            new_structure_id = int(user_input)
+            if 0 <= new_structure_id < num_structures:
+                structure_id = new_structure_id
+                print(f"Changed to structure ID: {structure_id}")
+            else:
+                print(f"Invalid structure ID {new_structure_id}. Keeping current selection: {structure_id}")
+    except (ValueError, KeyboardInterrupt):
+        print(f"Keeping current selection: {structure_id}")
+    
+    print(f"Validating structure ID {structure_id}")
     
     # Determine device
     if device == 'auto':
@@ -243,6 +301,7 @@ def validate_vae_reconstruction(
     # Try to get model config from checkpoint, fall back to defaults
     if 'config' in checkpoint and 'model' in checkpoint['config']:
         vae_config = checkpoint['config']['model']
+        print(f"Loaded model config from checkpoint: {vae_config}")
     else:
         # Use default VAE parameters (from vae_training_config.toml)
         print("Warning: Model config not found in checkpoint, using default parameters")
@@ -250,7 +309,7 @@ def validate_vae_reconstruction(
             'input_channels': 9,
             'latent_channels': 8,
             'base_channels': 32,
-            'levels': 4
+            'levels': 3  # Match the training config
         }
     
     from .models import VAE
@@ -263,13 +322,6 @@ def validate_vae_reconstruction(
     vae.load_state_dict(checkpoint['model_state_dict'])
     vae = vae.to(device_obj)
     vae.eval()
-    
-    # Load voxel library
-    voxel_library = VoxelLibrary(voxel_library_path)
-    
-    if structure_id >= len(voxel_library):
-        print(f"Error: Structure ID {structure_id} is out of range. Library has {len(voxel_library)} structures.")
-        return
     
     # Load the original structure
     print(f"Loading original structure {structure_id}...")
@@ -292,33 +344,87 @@ def validate_vae_reconstruction(
         metadata={**original_voxel.metadata, 'reconstructed': True}
     )
     
-    # Visualize side by side using napari
-    print("Opening napari viewer for side-by-side comparison...")
-    from frame_voxel.visualize_napari import NapariViewer
+    # Save voxel grids to temporary files for subprocess
+    import tempfile
+    import pickle
+    import subprocess
+    import sys
     
-    # Create side-by-side comparison
-    viewer = NapariViewer.compare_structures(
-        structures=[original_voxel, reconstructed_voxel],
-        channel=channel,
-        layout='row',
-        colormap='viridis',
-        opacity=0.7
-    )
-    
-    # Add some helpful information
-    print(f"\nVisualization opened in napari!")
-    print(f"Left: Original structure {structure_id}")
-    print(f"Right: VAE reconstructed structure")
-    print(f"Channel: {channel}")
-    print(f"Use the dimension sliders to slice through the structures")
-    print(f"Close the napari window when done")
-    
-    # Keep the script running until napari is closed
-    try:
-        import napari
-        napari.run()
-    except KeyboardInterrupt:
-        print("Visualization interrupted by user")
+    with tempfile.TemporaryDirectory() as temp_dir:
+        original_path = Path(temp_dir) / "original_voxel.pkl"
+        reconstructed_path = Path(temp_dir) / "reconstructed_voxel.pkl"
+        
+        # Save voxel grids
+        with open(original_path, 'wb') as f:
+            pickle.dump(original_voxel, f)
+        with open(reconstructed_path, 'wb') as f:
+            pickle.dump(reconstructed_voxel, f)
+        
+        # Create the subprocess script
+        subprocess_script = Path(temp_dir) / "view_voxel.py"
+        with open(subprocess_script, 'w') as f:
+            f.write(f'''#!/usr/bin/env python3
+import sys
+import pickle
+import napari
+from pathlib import Path
+
+# Add the frame packages to the path
+sys.path.insert(0, "{Path(__file__).parent.parent.parent.parent}")
+
+from frame_voxel.visualize_napari import NapariViewer
+
+# Load the voxel grid
+voxel_path = "{reconstructed_path}"
+with open(voxel_path, 'rb') as f:
+    voxel_grid = pickle.load(f)
+
+# Create viewer
+viewer = NapariViewer.view_structure(
+    voxel_grid=voxel_grid,
+    opacity=0.25,
+    empty_threshold=0.01
+)
+
+# Set window title
+viewer.window.qt_viewer.setWindowTitle("VAE Reconstructed Structure {structure_id}")
+
+# Run napari
+napari.run()
+''')
+        
+        # Make the script executable
+        subprocess_script.chmod(0o755)
+        
+        # Open the original structure in the main process
+        print("Opening original structure in napari...")
+        from frame_voxel.visualize_napari import NapariViewer
+        
+        original_viewer = NapariViewer.view_structure(
+            voxel_grid=original_voxel,
+            opacity=0.25,
+            empty_threshold=0.01
+        )
+        original_viewer.window.qt_viewer.setWindowTitle(f"Original Structure {structure_id}")
+        
+        # Start the subprocess for the reconstructed structure
+        print("Opening reconstructed structure in separate napari window...")
+        subprocess.Popen([
+            sys.executable, str(subprocess_script)
+        ])
+        
+        # Add helpful information
+        print(f"\nTwo napari windows opened:")
+        print(f"1. Original structure {structure_id}")
+        print(f"2. VAE reconstructed structure")
+        print(f"Close both windows when done")
+        
+        # Keep the script running until the original napari window is closed
+        try:
+            import napari
+            napari.run()
+        except KeyboardInterrupt:
+            print("Visualization interrupted by user")
 
 
 if __name__ == "__main__":

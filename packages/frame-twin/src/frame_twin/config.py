@@ -89,6 +89,7 @@ class TrainingConfig(BaseModel):
     optimizer: Literal["adam", "adamw", "sgd"] = "adam"
     scheduler: Literal["cosine", "step", "none"] = "cosine"
     num_workers: int = Field(ge=0)
+    grad_clip: Optional[float] = Field(None, ge=0.0)  # Gradient clipping value (None to disable)
     
     # Scheduler-specific parameters
     scheduler_params: Optional[Dict] = None

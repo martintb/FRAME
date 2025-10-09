@@ -13,11 +13,10 @@ from .voxel_grid import VoxelGrid
 from .storage import VoxelLibrary
 
 try:
-    from .visualize_napari import NapariViewer, NapariSlicer
+    from .visualize_napari import NapariViewer
     NAPARI_AVAILABLE = True
 except ImportError:
     NapariViewer = None
-    NapariSlicer = None
     NAPARI_AVAILABLE = False
 
 
@@ -39,38 +38,7 @@ def main():
         "--index", type=int, default=None, help="Structure index to visualize (default: random)"
     )
     napari_parser.add_argument(
-        "--channels", type=str, nargs="*", help="Specific channels to show (default: all)"
-    )
-    napari_parser.add_argument(
-        "--opacity", type=float, default=0.5, help="Default opacity for all channels (default: 0.5)"
-    )
-    napari_parser.add_argument(
-        "--rendering", type=str, default="attenuated_mip", 
-        choices=["mip", "translucent", "attenuated_mip", "minip", "average"],
-        help="Rendering mode (default: attenuated_mip)"
-    )
-    napari_parser.add_argument(
-        "--max-channels", type=int, default=12,
-        help="Maximum number of channels to display (ranked by non-zero voxels)"
-    )
-    napari_parser.add_argument(
-        "--slicer", action="store_true", help="Open in 2D mode with dimension sliders for slicing"
-    )
-    napari_parser.add_argument(
-        "--empty-threshold", type=float, default=0.01, 
-        help="Threshold for considering voxels as empty (sum across channels, default: 0.01)"
-    )
-    napari_parser.add_argument(
-        "--clean-rendering", action="store_true", 
-        help="Use clean rendering mode to avoid pink cube (uses translucent rendering)"
-    )
-    napari_parser.add_argument(
-        "--argmax", action="store_true",
-        help="Show argmax across channels with different colors for each channel"
-    )
-    napari_parser.add_argument(
-        "--argmax-colormap", type=str, default="tab20",
-        help="Colormap for argmax visualization (default: tab20)"
+        "--opacity", type=float, default=0.25, help="Default opacity for all channels (default: 0.25)"
     )
 
     # Info command
@@ -153,69 +121,16 @@ def view_napari_command(args):
             pass
         
         # Prepare channel selection
-        visible_channels = args.channels
-        if visible_channels:
-            # Validate that requested channels exist
-            available_channels = set(voxel_grid.channels.keys())
-            requested_channels = set(visible_channels)
-            missing_channels = requested_channels - available_channels
-            if missing_channels:
-                print(f"Warning: Requested channels not found: {missing_channels}", file=sys.stderr)
-                visible_channels = [ch for ch in visible_channels if ch in available_channels]
-                if not visible_channels:
-                    print("Error: No valid channels specified", file=sys.stderr)
-                    sys.exit(1)
-        
-        # Open napari viewer
-        if args.argmax:
-            print("Opening napari with argmax channel visualization...")
-            viewer = NapariSlicer.view_argmax_channels(
-                voxel_grid,
-                colormap=args.argmax_colormap,
-                empty_threshold=args.empty_threshold
-            )
-        elif args.slicer:
-            print("Opening napari in 2D slicer mode...")
-            if not visible_channels:
-                visible_channels = list(voxel_grid.channels.keys())
-            
-            if len(visible_channels) > 1:
-                print(f"Warning: Slicer mode shows only one channel. Using: {visible_channels[0]}")
-            
-            viewer = NapariSlicer.view_with_sliders(
-                voxel_grid, 
-                visible_channels[0], 
-                colormap='viridis'
-            )
-        else:
-            print("Opening napari in 3D viewer mode...")
-            if args.clean_rendering:
-                print("Using clean rendering mode to avoid pink cube...")
-                viewer = NapariViewer.view_structure_clean(
-                    voxel_grid,
-                    visible_channels=visible_channels,
-                    opacity=args.opacity,
-                    empty_threshold=args.empty_threshold
-                )
-            else:
-                viewer = NapariViewer.view_structure(
-                    voxel_grid,
-                    visible_channels=visible_channels,
-                    opacity=args.opacity,
-                    rendering=args.rendering,
-                    empty_threshold=args.empty_threshold,
-                    max_channels=args.max_channels
-                )
+        print("Opening napari in 3D viewer mode...")
+        NapariViewer.view_structure(
+            voxel_grid,
+            opacity=args.opacity,
+        )
         
         print("✓ Napari viewer opened!")
         print("\nTips for better visualization:")
         print("  • Use the layer controls (left panel) to toggle channels on/off")
         print("  • Adjust opacity and contrast using the layer controls")
-        print("  • Try different rendering modes: --rendering translucent")
-        print("  • If you see a pink cube, try: --clean-rendering or --rendering attenuated_mip")
-        print("  • Use --channels to show specific channels only")
-        print("  • Use --argmax to see which channel dominates at each voxel")
-        print("  • Use --slicer for 2D slicing with dimension sliders")
         print("\nClose the napari window to exit.")
         
         # Keep the viewer open

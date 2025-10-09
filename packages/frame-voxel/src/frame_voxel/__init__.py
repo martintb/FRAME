@@ -1,4 +1,4 @@
-"""FRAME-Core: Foundation for data representation and I/O.
+"""FRAME-voxel: Foundation for data representation and I/O.
 
 This package provides:
 - VoxelGrid: Multi-channel 3D voxel grid data model
@@ -30,7 +30,6 @@ from .dataset import (
 # Visualization - Napari
 from .visualize_napari import (
     NapariViewer,
-    NapariSlicer,
 )
 
 # Visualization - PyVista
@@ -56,7 +55,6 @@ __all__ = [
     "collate_voxel_grids_with_params",
     # Visualization
     "NapariViewer",
-    "NapariSlicer",
     "PyVistaRenderer",
     "PyVistaSlicer",
     "BatchVisualizer",
