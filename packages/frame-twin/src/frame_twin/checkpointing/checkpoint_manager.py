@@ -164,7 +164,7 @@ class CheckpointManager:
         
         # Restore random state
         if 'rng_state' in checkpoint_data:
-            torch.set_rng_state(torch.tensor(checkpoint_data['rng_state']))
+            torch.set_rng_state(torch.ByteTensor(checkpoint_data['rng_state']))
         
         return {
             'epoch': checkpoint_data['epoch'],

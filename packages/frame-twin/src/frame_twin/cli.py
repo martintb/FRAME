@@ -36,6 +36,14 @@ def main():
     evaluate_parser.add_argument('config', help='Path to config TOML file')
     evaluate_parser.add_argument('--checkpoint', required=True, help='Path to model checkpoint')
     
+    # Validate VAE command
+    validate_vae_parser = subparsers.add_parser('validate-vae', help='Validate VAE reconstruction with side-by-side visualization')
+    validate_vae_parser.add_argument('checkpoint', help='Path to VAE checkpoint')
+    validate_vae_parser.add_argument('voxel_library', help='Path to voxel library')
+    validate_vae_parser.add_argument('--structure-id', type=int, default=0, help='Structure ID to validate (default: 0)')
+    validate_vae_parser.add_argument('--channel', default='shell1_head', help='Channel to visualize (default: shell1_head)')
+    validate_vae_parser.add_argument('--device', default='auto', help='Device to use (auto, cpu, cuda, mps)')
+    
     args = parser.parse_args()
     
     if args.command == 'train-vae':
@@ -46,6 +54,14 @@ def main():
         generate_structures(args.config)
     elif args.command == 'evaluate':
         evaluate_model(args.config, args.checkpoint)
+    elif args.command == 'validate-vae':
+        validate_vae_reconstruction(
+            checkpoint_path=args.checkpoint,
+            voxel_library_path=args.voxel_library,
+            structure_id=args.structure_id,
+            channel=args.channel,
+            device=args.device
+        )
     else:
         parser.print_help()
         sys.exit(1)
@@ -195,6 +211,114 @@ def evaluate_model(config_path: str, checkpoint_path: str):
     """Evaluate a trained model."""
     print("Model evaluation not yet implemented")
     # TODO: Implement model evaluation
+
+
+def validate_vae_reconstruction(
+    checkpoint_path: str,
+    voxel_library_path: str,
+    structure_id: int = 0,
+    channel: str = 'shell1_head',
+    device: str = 'auto'
+):
+    """Validate VAE reconstruction with side-by-side napari visualization."""
+    print(f"Loading VAE checkpoint from {checkpoint_path}")
+    print(f"Loading voxel library from {voxel_library_path}")
+    print(f"Validating structure ID {structure_id}, channel '{channel}'")
+    
+    # Determine device
+    if device == 'auto':
+        if torch.cuda.is_available():
+            device = 'cuda'
+        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            device = 'mps'
+        else:
+            device = 'cpu'
+    
+    device_obj = torch.device(device)
+    print(f"Using device: {device_obj}")
+    
+    # Load VAE model from checkpoint
+    checkpoint = torch.load(checkpoint_path, map_location='cpu')
+    
+    # Try to get model config from checkpoint, fall back to defaults
+    if 'config' in checkpoint and 'model' in checkpoint['config']:
+        vae_config = checkpoint['config']['model']
+    else:
+        # Use default VAE parameters (from vae_training_config.toml)
+        print("Warning: Model config not found in checkpoint, using default parameters")
+        vae_config = {
+            'input_channels': 9,
+            'latent_channels': 8,
+            'base_channels': 32,
+            'levels': 4
+        }
+    
+    from .models import VAE
+    vae = VAE(
+        input_channels=vae_config['input_channels'],
+        latent_channels=vae_config['latent_channels'],
+        base_channels=vae_config['base_channels'],
+        levels=vae_config['levels']
+    )
+    vae.load_state_dict(checkpoint['model_state_dict'])
+    vae = vae.to(device_obj)
+    vae.eval()
+    
+    # Load voxel library
+    voxel_library = VoxelLibrary(voxel_library_path)
+    
+    if structure_id >= len(voxel_library):
+        print(f"Error: Structure ID {structure_id} is out of range. Library has {len(voxel_library)} structures.")
+        return
+    
+    # Load the original structure
+    print(f"Loading original structure {structure_id}...")
+    original_voxel = voxel_library[structure_id]
+    
+    # Get the voxel data and move to device
+    voxel_data = original_voxel.data.to(device_obj)
+    
+    # Reconstruct using VAE
+    print("Reconstructing with VAE...")
+    with torch.no_grad():
+        reconstructed_data, _, _, _ = vae(voxel_data.unsqueeze(0))  # Add batch dimension
+        reconstructed_data = reconstructed_data.squeeze(0)  # Remove batch dimension
+    
+    # Create reconstructed VoxelGrid
+    reconstructed_voxel = original_voxel.__class__(
+        data=reconstructed_data.cpu(),
+        voxel_size=original_voxel.voxel_size,
+        channels=original_voxel.channels,
+        metadata={**original_voxel.metadata, 'reconstructed': True}
+    )
+    
+    # Visualize side by side using napari
+    print("Opening napari viewer for side-by-side comparison...")
+    from frame_voxel.visualize_napari import NapariViewer
+    
+    # Create side-by-side comparison
+    viewer = NapariViewer.compare_structures(
+        structures=[original_voxel, reconstructed_voxel],
+        channel=channel,
+        layout='row',
+        colormap='viridis',
+        opacity=0.7
+    )
+    
+    # Add some helpful information
+    print(f"\nVisualization opened in napari!")
+    print(f"Left: Original structure {structure_id}")
+    print(f"Right: VAE reconstructed structure")
+    print(f"Channel: {channel}")
+    print(f"Use the dimension sliders to slice through the structures")
+    print(f"Close the napari window when done")
+    
+    # Keep the script running until napari is closed
+    try:
+        import napari
+        napari.run()
+    except KeyboardInterrupt:
+        print("Visualization interrupted by user")
 
 
 if __name__ == "__main__":
