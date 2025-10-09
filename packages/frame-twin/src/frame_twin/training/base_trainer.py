@@ -83,6 +83,11 @@ class BaseTrainer:
             
             # Backward pass
             loss.backward()
+            
+            # Gradient clipping
+            if self.training_config.grad_clip is not None and self.training_config.grad_clip > 0:
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.training_config.grad_clip)
+            
             self.optimizer.step()
             
             # Update metrics
@@ -212,6 +217,10 @@ class BaseTrainer:
         """Compute loss for a batch. To be implemented by subclasses."""
         raise NotImplementedError("Subclasses must implement _compute_loss")
     
+    def _get_model_config(self) -> Dict[str, Any]:
+        """Get model configuration. To be implemented by subclasses."""
+        raise NotImplementedError("Subclasses must implement _get_model_config")
+    
     def _log_metrics(self, metrics: Dict[str, float], prefix: str, step: int):
         """Log metrics to tensorboard."""
         if self.writer is not None:
@@ -228,9 +237,13 @@ class BaseTrainer:
     
     def _save_checkpoint(self, train_metrics: Dict[str, float], val_metrics: Dict[str, float], is_best: bool):
         """Save training checkpoint."""
+        # Get model configuration from the model itself
+        model_config = self._get_model_config()
+        
         config_dict = {
             'training': self.training_config.dict(),
-            'logging': self.logging_config.dict()
+            'logging': self.logging_config.dict(),
+            'model': model_config
         }
         
         metrics = {**train_metrics, **val_metrics}

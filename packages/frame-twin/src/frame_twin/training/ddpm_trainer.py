@@ -270,3 +270,18 @@ class DDPMTrainer(BaseTrainer):
                 print(f"Warning: Could not generate validation samples: {e}")
         
         return epoch_metrics
+    
+    def _get_model_config(self) -> Dict[str, Any]:
+        """Get DDPM model configuration."""
+        return {
+            'type': 'ddpm',
+            'conditioning_strategy': self.config.model.conditioning_strategy,
+            'vae_checkpoint': self.config.model.vae_checkpoint,
+            'freeze_vae': self.config.model.freeze_vae,
+            'latent_channels': self.config.model.latent_channels,
+            'timesteps': self.config.model.timesteps,
+            'beta_schedule': self.config.model.beta_schedule,
+            'unet_channels': self.config.model.unet_channels,
+            'attention_resolutions': self.config.model.attention_resolutions,
+            'conditioning': self.config.model.conditioning.dict()
+        }

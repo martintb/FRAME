@@ -50,15 +50,11 @@ class VAELoss(nn.Module):
             recon_loss: Reconstruction loss
             kl_loss: KL divergence loss
         """
-        batch_size = x.shape[0]
+        # Reconstruction loss - use mean reduction like legacy implementation
+        recon_loss = F.mse_loss(x_recon, x)
         
-        # Reconstruction loss
-        recon_loss = self.reconstruction_loss(x_recon, x) / batch_size
-        
-        # KL divergence loss
-        kl_loss = -0.5 * torch.sum(
-            1 + logvar - mean.pow(2) - logvar.exp()
-        ) / batch_size
+        # KL divergence loss - use mean reduction like legacy implementation
+        kl_loss = -0.5 * torch.mean(1 + logvar - mean.pow(2) - logvar.exp())
         
         # Total loss
         total_loss = (

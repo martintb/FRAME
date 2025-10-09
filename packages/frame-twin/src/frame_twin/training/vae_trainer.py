@@ -135,3 +135,13 @@ class VAETrainer(BaseTrainer):
         self.model.eval()
         with torch.no_grad():
             return self.model.sample(num_samples, self.device)
+    
+    def _get_model_config(self) -> Dict[str, Any]:
+        """Get VAE model configuration."""
+        return {
+            'type': 'vae',
+            'input_channels': self.model.input_channels,
+            'latent_channels': self.model.latent_channels,
+            'base_channels': self.model.base_channels,
+            'levels': self.model.levels
+        }
