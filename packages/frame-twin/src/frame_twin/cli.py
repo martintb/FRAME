@@ -21,11 +21,13 @@ def main():
     train_vae_parser = subparsers.add_parser('train-vae', help='Train VAE model')
     train_vae_parser.add_argument('config', help='Path to VAE training config TOML file')
     train_vae_parser.add_argument('--resume', help='Path to checkpoint to resume from')
+    train_vae_parser.add_argument('--continue', dest='resume', help='Alias for --resume: Path to checkpoint to resume from')
     
     # Train DDPM command
     train_ddpm_parser = subparsers.add_parser('train-ddpm', help='Train DDPM model')
     train_ddpm_parser.add_argument('config', help='Path to DDPM training config TOML file')
     train_ddpm_parser.add_argument('--resume', help='Path to checkpoint to resume from')
+    train_ddpm_parser.add_argument('--continue', dest='resume', help='Alias for --resume: Path to checkpoint to resume from')
     
     # Generate command
     generate_parser = subparsers.add_parser('generate', help='Generate structures')
@@ -129,6 +131,9 @@ def train_vae(config_path: str, resume_checkpoint: Optional[str] = None):
             resume_checkpoint, trainer.model, trainer.optimizer, trainer.scheduler
         )
         start_epoch = checkpoint_data['epoch'] + 1
+        # Restore global_step to maintain proper training state
+        trainer.global_step = checkpoint_data['global_step']
+        print(f"Resuming from epoch {checkpoint_data['epoch']}, global step {checkpoint_data['global_step']}")
     
     print("Starting VAE training...")
     trainer.train(start_epoch=start_epoch)
@@ -193,6 +198,9 @@ def train_ddpm(config_path: str, resume_checkpoint: Optional[str] = None):
             resume_checkpoint, trainer.model, trainer.optimizer, trainer.scheduler
         )
         start_epoch = checkpoint_data['epoch'] + 1
+        # Restore global_step to maintain proper training state
+        trainer.global_step = checkpoint_data['global_step']
+        print(f"Resuming from epoch {checkpoint_data['epoch']}, global step {checkpoint_data['global_step']}")
     
     print("Starting DDPM training...")
     trainer.train(start_epoch=start_epoch)
