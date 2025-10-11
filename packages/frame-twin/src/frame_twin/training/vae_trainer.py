@@ -14,19 +14,35 @@ class VAETrainer(BaseTrainer):
     """Trainer for VAE models."""
     
     def __init__(self, config: VAEConfig):
-        # Create model
-        from ..models import VAE
-        model = VAE(
-            input_channels=config.model.input_channels,
-            latent_channels=config.model.latent_channels,
-            base_channels=config.model.base_channels,
-            levels=config.model.levels
-        )
+        # Create model based on type
+        if config.model.type == "vae":
+            from ..models import VAE
+            model = VAE(
+                input_channels=config.model.input_channels,
+                latent_channels=config.model.latent_channels,
+                base_channels=config.model.base_channels,
+                levels=config.model.levels
+            )
+        elif config.model.type == "unet_vae":
+            from ..models import UNetVAE
+            model = UNetVAE(
+                input_channels=config.model.input_channels,
+                latent_channels=config.model.latent_channels,
+                base_channels=config.model.base_channels,
+                levels=config.model.levels,
+                norm_groups=config.model.norm_groups
+            )
+        else:
+            raise ValueError(f"Unknown model type: {config.model.type}")
         
         # Create loss function
         loss_fn = VAELoss(
-            reconstruction_weight=config.loss.reconstruction_weight,
-            kl_weight=config.loss.kl_weight
+            reconstruction_weight=config.loss.reconstruction_weight or 1.0,
+            kl_weight=config.loss.kl_weight or 1e-4,
+            reconstruction_type=getattr(config.loss, 'reconstruction_type', 'mse') or 'mse',
+            mask_threshold=getattr(config.loss, 'mask_threshold', 0.005) or 0.005,
+            bg_weight=getattr(config.loss, 'bg_weight', 0.5) or 0.5,
+            edge_weight=getattr(config.loss, 'edge_weight', 0.0) or 0.0
         )
         
         # Create optimizer
@@ -99,17 +115,35 @@ class VAETrainer(BaseTrainer):
         # Forward pass
         x_recon, z, mu, logvar = self.model(voxels)
         
-        # Compute loss
-        total_loss, recon_loss, kl_loss = self.loss_fn(x_recon, voxels, mu, logvar)
+        # Compute loss components
+        total_loss_static, recon_loss, kl_loss, data_recon, bg_penalty, edge_loss = self.loss_fn(x_recon, voxels, mu, logvar)
+
+        # Apply KL warmup by recomputing total loss with dynamic KL weight
+        current_kl_weight = self._current_kl_weight()
+        total_loss = self.loss_fn.reconstruction_weight * recon_loss + current_kl_weight * kl_loss
         
         # Metrics
         metrics = {
             'total_loss': total_loss.item(),
             'recon_loss': recon_loss.item(),
-            'kl_loss': kl_loss.item()
+            'recon_data': data_recon.item(),
+            'bg_penalty': bg_penalty.item(),
+            'edge_loss': edge_loss.item(),
+            'kl_loss': kl_loss.item(),
+            'kl_weight': float(current_kl_weight),
         }
         
         return total_loss, metrics
+
+    def _current_kl_weight(self) -> float:
+        """Compute current KL weight with optional warmup over epochs."""
+        warmup_epochs = getattr(self.config.training, 'kl_warmup_epochs', 0) or 0
+        base_weight = self.loss_fn.kl_weight
+        if warmup_epochs <= 0:
+            return base_weight
+        # Linear schedule from 0 to base_weight over warmup_epochs
+        progress = min(1.0, max(0.0, (self.current_epoch + 1) / float(warmup_epochs)))
+        return base_weight * progress
     
     def train(self, start_epoch: int = 0) -> None:
         """Train the VAE model."""
@@ -138,10 +172,14 @@ class VAETrainer(BaseTrainer):
     
     def _get_model_config(self) -> Dict[str, Any]:
         """Get VAE model configuration."""
-        return {
-            'type': 'vae',
+        config_dict = {
+            'type': self.config.model.type,
             'input_channels': self.model.input_channels,
             'latent_channels': self.model.latent_channels,
             'base_channels': self.model.base_channels,
             'levels': self.model.levels
         }
+        # Add norm_groups for UNetVAE
+        if self.config.model.type == "unet_vae":
+            config_dict['norm_groups'] = self.model.norm_groups
+        return config_dict

@@ -51,7 +51,8 @@ class Decoder3D(nn.Module):
                 [
                     nn.GroupNorm(8, ch),
                     nn.SiLU(),
-                    nn.ConvTranspose3d(ch, ch // 2, kernel_size=4, stride=2, padding=1),
+                    nn.Upsample(scale_factor=2, mode='trilinear', align_corners=False),
+                    nn.Conv3d(ch, ch // 2, kernel_size=3, padding=1),
                 ]
             )
             ch //= 2

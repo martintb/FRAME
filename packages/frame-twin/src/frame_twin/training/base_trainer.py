@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
+import numpy as np
 import time
 from pathlib import Path
 from typing import Dict, Any, Optional, Callable
@@ -100,6 +101,16 @@ class BaseTrainer:
             # Logging
             if self.global_step % self.logging_config.log_every_steps == 0:
                 self._log_metrics(metrics, prefix='train', step=self.global_step)
+
+            # Periodic reconstruction comparison images
+            if getattr(self.logging_config, 'n_recon_compare', 0):
+                n_rc = self.logging_config.n_recon_compare or 0
+                if n_rc > 0 and (self.global_step % n_rc == 0):
+                    try:
+                        self._log_reconstruction_images(batch, metrics, step=self.global_step)
+                    except Exception:
+                        # Avoid crashing training due to visualization
+                        pass
             
             # Update progress bar
             progress_bar.set_postfix({
@@ -226,6 +237,56 @@ class BaseTrainer:
         if self.writer is not None:
             for key, value in metrics.items():
                 self.writer.add_scalar(f"{prefix}/{key}", value, step)
+
+    def _log_reconstruction_images(self, batch: Dict[str, Any], metrics: Dict[str, float], step: int):
+        """Log argmax slice images for input, reconstruction, and diff to tensorboard."""
+        if self.writer is None:
+            return
+        if 'voxels' not in batch:
+            return
+        vox = batch['voxels']  # (B, C, D, H, W) on device
+
+        # Run a forward pass on a single example (no grad)
+        self.model.eval()
+        with torch.no_grad():
+            x_recon, _, _, _ = self.model(vox)
+        self.model.train()
+
+        # Select last item in batch for reproducibility
+        x = vox[-1]            # (C, D, H, W)
+        xr = x_recon[-1]       # (C, D, H, W)
+
+        # If outputs are logits for BCE, map to [0,1] for visualization
+        if hasattr(self, 'loss_fn') and getattr(self.loss_fn, 'reconstruction_type', 'mse') == 'bce_logits':
+            xr_vis = torch.sigmoid(xr)
+        else:
+            xr_vis = xr
+
+        # Compute center slice index along depth
+        D = x.shape[1]
+        zc = D // 2
+
+        # Argmax over channels -> (D, H, W) then take center slice
+        x_arg = torch.argmax(x, dim=0)           # (D, H, W)
+        xr_arg = torch.argmax(xr_vis, dim=0)     # (D, H, W)
+
+        x_img = x_arg[zc].detach().to('cpu').numpy().astype(np.float32)
+        xr_img = xr_arg[zc].detach().to('cpu').numpy().astype(np.float32)
+
+        # Diff: signed difference of argmax maps
+        diff_img = (xr_img - x_img).astype(np.float32)
+
+        # Normalize for visualization
+        # Argmax maps are integer labels; log as images with a consistent vmax
+        vmax = max(x_img.max() if x_img.size else 1.0, xr_img.max() if xr_img.size else 1.0, 1.0)
+        self.writer.add_image('compare/input_argmax_center', x_img[None, ...] / (vmax if vmax > 0 else 1.0), step, dataformats='CHW')
+        self.writer.add_image('compare/recon_argmax_center', xr_img[None, ...] / (vmax if vmax > 0 else 1.0), step, dataformats='CHW')
+
+        # Diff image: shift to 0..1 for bwr-like visualization in TensorBoard
+        # Map -max_abs..+max_abs -> 0..1
+        max_abs = max(abs(diff_img.min()), abs(diff_img.max()), 1.0)
+        diff_norm = (diff_img / max_abs) * 0.5 + 0.5
+        self.writer.add_image('compare/diff_argmax_center_bwr', diff_norm[None, ...], step, dataformats='CHW')
     
     def _log_epoch_metrics(self, train_metrics: Dict[str, float], val_metrics: Dict[str, float]):
         """Log epoch-level metrics."""

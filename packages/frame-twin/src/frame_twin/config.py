@@ -34,11 +34,12 @@ class DataConfig(BaseModel):
 
 class VAEModelConfig(BaseModel):
     """VAE model configuration."""
-    type: Literal["vae"] = "vae"
+    type: Literal["vae", "unet_vae"] = "vae"
     input_channels: int = Field(gt=0)
     latent_channels: int = Field(gt=0)
     base_channels: int = Field(gt=0)
     levels: int = Field(gt=0, le=6)  # Max 6 levels to avoid too much compression
+    norm_groups: int = Field(8, gt=0)  # Number of groups for GroupNorm (UNetVAE only)
     
     @validator('levels')
     def validate_levels(cls, v):
@@ -90,6 +91,7 @@ class TrainingConfig(BaseModel):
     scheduler: Literal["cosine", "step", "none"] = "cosine"
     num_workers: int = Field(ge=0)
     grad_clip: Optional[float] = Field(None, ge=0.0)  # Gradient clipping value (None to disable)
+    kl_warmup_epochs: Optional[int] = Field(0, ge=0)  # Linear KL warmup epochs
     
     # Scheduler-specific parameters
     scheduler_params: Optional[Dict] = None
@@ -100,6 +102,10 @@ class LossConfig(BaseModel):
     # VAE loss parameters
     reconstruction_weight: Optional[float] = Field(None, gt=0.0)
     kl_weight: Optional[float] = Field(None, gt=0.0)
+    reconstruction_type: Optional[Literal["mse", "l1", "bce_logits"]] = None
+    mask_threshold: Optional[float] = Field(None, ge=0.0)
+    bg_weight: Optional[float] = Field(None, ge=0.0)
+    edge_weight: Optional[float] = Field(None, ge=0.0)  # Edge-preserving loss weight
     
     # DDPM loss parameters
     loss_type: Optional[Literal["mse", "mae"]] = None
@@ -118,6 +124,7 @@ class LoggingConfig(BaseModel):
     """Logging configuration."""
     log_every_steps: int = Field(gt=0)
     tensorboard_dir: Optional[str] = None
+    n_recon_compare: Optional[int] = Field(0, ge=0)
 
 
 class SamplingConfig(BaseModel):
