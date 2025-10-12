@@ -63,6 +63,11 @@ class VAELoss(nn.Module):
         """Compute gradient magnitude using 3D Sobel filters."""
         B, C, D, H, W = x.shape
         
+        # Ensure Sobel filters are on the same device as input
+        sobel_x = self.sobel_x.to(x.device)
+        sobel_y = self.sobel_y.to(x.device)
+        sobel_z = self.sobel_z.to(x.device)
+        
         # Process each channel separately
         grad_x_list = []
         grad_y_list = []
@@ -72,9 +77,9 @@ class VAELoss(nn.Module):
             x_c = x[:, c:c+1, :, :, :]  # (B, 1, D, H, W)
             
             # Compute gradients in each direction
-            gx = F.conv3d(x_c, self.sobel_x, padding=1)
-            gy = F.conv3d(x_c, self.sobel_y, padding=1)
-            gz = F.conv3d(x_c, self.sobel_z, padding=1)
+            gx = F.conv3d(x_c, sobel_x, padding=1)
+            gy = F.conv3d(x_c, sobel_y, padding=1)
+            gz = F.conv3d(x_c, sobel_z, padding=1)
             
             grad_x_list.append(gx)
             grad_y_list.append(gy)

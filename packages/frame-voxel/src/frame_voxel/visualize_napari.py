@@ -52,7 +52,7 @@ class NapariViewer:
         total_intensity = np.sum(all_data, axis=0)  # Sum across channels
         empty_mask = total_intensity < empty_threshold
 
-        default_colors = ['magenta','cyan','yellow','red','green','blue','orange','gray','purple']
+        default_colors = ['magenta','cyan','yellow','red','green','blue','orange','gray','purple','pink']
         default_cmaps = {ch_name: color for ch_name, color in zip(voxel_grid.channels.keys(), default_colors)}
         
         for ch_name in voxel_grid.channels.keys():

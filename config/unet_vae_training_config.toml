@@ -18,7 +18,7 @@ test_ratio = 0.1
 type = "unet_vae"  # Use UNet architecture with skip connections
 input_channels = 10  # Number of material channels
 latent_channels = 8  # Small latent space dimension
-base_channels = 32  # Base number of channels (doubles each level)
+base_channels = 16  # Base number of channels (doubles each level) - REDUCED for memory
 levels = 3  # Number of downsampling levels (128³ → 16³ latent)
 norm_groups = 8  # Number of groups for GroupNorm
 
@@ -27,7 +27,7 @@ device = "mps"  # "cuda", "mps", or "cpu"
 distributed = false  # Set true for DDP
 num_epochs = 100
 num_workers = 0
-batch_size = 4
+batch_size = 1  # REDUCED for memory (UNet with skips is memory-intensive)
 learning_rate = 2e-4
 optimizer = "adam"  # "adam", "adamw", or "sgd"
 scheduler = "cosine"  # "cosine", "step", or "none"

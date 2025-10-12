@@ -5,6 +5,10 @@ import sys
 from pathlib import Path
 from typing import Optional
 import torch
+try:
+    import tomllib as toml  # Python 3.11+
+except Exception:  # pragma: no cover - fallback for older runtimes
+    import tomli as toml
 
 from .config import VAEConfig, DDPMConfig, InferenceConfig
 from .training import VAETrainer
@@ -303,22 +307,48 @@ def validate_vae_reconstruction(
     device_obj = torch.device(device)
     print(f"Using device: {device_obj}")
     
-    # Load VAE model from checkpoint
-    checkpoint = torch.load(checkpoint_path, map_location='cpu')
+    # Prefer reading model/loss config from the sibling config.toml next to the checkpoint
+    ckpt_path_obj = Path(checkpoint_path)
+    ckpt_dir = ckpt_path_obj.parent
+    config_toml_path = ckpt_dir / "config.toml"
+    use_sigmoid = False
+    vae_config = None
+    if config_toml_path.exists():
+        try:
+            with open(config_toml_path, 'rb') as f:
+                full_cfg = toml.load(f)
+            model_cfg = full_cfg.get('model', {}) or {}
+            loss_cfg = full_cfg.get('loss', {}) or {}
+            vae_config = {
+                'input_channels': model_cfg.get('input_channels'),
+                'latent_channels': model_cfg.get('latent_channels'),
+                'base_channels': model_cfg.get('base_channels'),
+                'levels': model_cfg.get('levels'),
+            }
+            use_sigmoid = (loss_cfg.get('reconstruction_type', 'mse') == 'bce_logits')
+            print(f"Loaded model config from TOML: {vae_config}")
+            print(f"Reconstruction uses sigmoid: {use_sigmoid}")
+        except Exception as e:
+            print(f"Warning: Failed to parse {config_toml_path}: {e}")
     
-    # Try to get model config from checkpoint, fall back to defaults
-    if 'config' in checkpoint and 'model' in checkpoint['config']:
-        vae_config = checkpoint['config']['model']
-        print(f"Loaded model config from checkpoint: {vae_config}")
-    else:
-        # Use default VAE parameters (from vae_training_config.toml)
-        print("Warning: Model config not found in checkpoint, using default parameters")
-        vae_config = {
-            'input_channels': 9,
-            'latent_channels': 8,
-            'base_channels': 32,
-            'levels': 3  # Match the training config
-        }
+    # Fallback: Read model config from checkpoint if TOML missing or incomplete
+    checkpoint = torch.load(checkpoint_path, map_location='cpu')
+    if vae_config is None or any(v is None for v in vae_config.values()):
+        if 'config' in checkpoint and 'model' in checkpoint['config']:
+            vae_config = checkpoint['config']['model']
+            print(f"Loaded model config from checkpoint: {vae_config}")
+        else:
+            print("Warning: Model config not found; using default parameters")
+            vae_config = {
+                'input_channels': 9,
+                'latent_channels': 8,
+                'base_channels': 32,
+                'levels': 3
+            }
+        # If we didn't determine sigmoid from TOML, try checkpoint loss config
+        if not use_sigmoid:
+            loss_cfg = (checkpoint.get('config', {}) or {}).get('loss', {}) or {}
+            use_sigmoid = (loss_cfg.get('reconstruction_type', 'mse') == 'bce_logits')
     
     from .models import VAE
     vae = VAE(
@@ -337,12 +367,18 @@ def validate_vae_reconstruction(
     
     # Get the voxel data and move to device
     voxel_data = original_voxel.data.to(device_obj)
+    # Validate channel count against model
+    if voxel_data.shape[0] != vae.input_channels:
+        raise ValueError(
+            f"Input channels ({voxel_data.shape[0]}) do not match model input_channels ({vae.input_channels})."
+        )
     
     # Reconstruct using VAE
     print("Reconstructing with VAE...")
     with torch.no_grad():
-        reconstructed_data, _, _, _ = vae(voxel_data.unsqueeze(0))  # Add batch dimension
-        reconstructed_data = reconstructed_data.squeeze(0)  # Remove batch dimension
+        recon_logits, _, _, _ = vae(voxel_data.unsqueeze(0))  # Add batch dimension
+        recon = torch.sigmoid(recon_logits) if use_sigmoid else recon_logits
+        reconstructed_data = recon.squeeze(0)  # Remove batch dimension
     
     # Create reconstructed VoxelGrid
     reconstructed_voxel = original_voxel.__class__(
@@ -351,6 +387,19 @@ def validate_vae_reconstruction(
         channels=original_voxel.channels,
         metadata={**original_voxel.metadata, 'reconstructed': True}
     )
+    print(f"Reconstructed voxel grid: {reconstructed_voxel}")
+    print(f"Reconstructed voxel grid channels: {reconstructed_voxel.channels}")
+    print(f"Reconstructed voxel grid metadata: {reconstructed_voxel.metadata}")
+    print(f"Reconstructed voxel grid shape: {reconstructed_voxel.shape}")
+    print(f"Reconstructed voxel grid voxel size: {reconstructed_voxel.voxel_size}")
+    print(f"Reconstructed voxel grid data: {reconstructed_voxel.data}")
+    print(f"Reconstructed voxel grid data shape: {reconstructed_voxel.data.shape}")
+    print(f"Reconstructed voxel grid data dtype: {reconstructed_voxel.data.dtype}")
+    print(f"Reconstructed voxel grid data min: {reconstructed_voxel.data.min()}")
+    print(f"Reconstructed voxel grid data max: {reconstructed_voxel.data.max()}")
+    print(f"Reconstructed voxel grid data mean: {reconstructed_voxel.data.mean()}")
+    print(f"Reconstructed voxel grid data std: {reconstructed_voxel.data.std()}")
+    
     
     # Save voxel grids to temporary files for subprocess
     import tempfile
