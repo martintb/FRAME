@@ -313,19 +313,25 @@ def validate_vae_reconstruction(
     config_toml_path = ckpt_dir / "config.toml"
     use_sigmoid = False
     vae_config = None
+    model_type = "vae"  # Default to regular VAE
     if config_toml_path.exists():
         try:
             with open(config_toml_path, 'rb') as f:
                 full_cfg = toml.load(f)
             model_cfg = full_cfg.get('model', {}) or {}
             loss_cfg = full_cfg.get('loss', {}) or {}
+            model_type = model_cfg.get('type', 'vae')  # Check model type
             vae_config = {
                 'input_channels': model_cfg.get('input_channels'),
                 'latent_channels': model_cfg.get('latent_channels'),
                 'base_channels': model_cfg.get('base_channels'),
                 'levels': model_cfg.get('levels'),
             }
+            # Add norm_groups for UNet-VAE
+            if model_type == 'unet_vae':
+                vae_config['norm_groups'] = model_cfg.get('norm_groups', 8)
             use_sigmoid = (loss_cfg.get('reconstruction_type', 'mse') == 'bce_logits')
+            print(f"Loaded model type: {model_type}")
             print(f"Loaded model config from TOML: {vae_config}")
             print(f"Reconstruction uses sigmoid: {use_sigmoid}")
         except Exception as e:
@@ -336,6 +342,8 @@ def validate_vae_reconstruction(
     if vae_config is None or any(v is None for v in vae_config.values()):
         if 'config' in checkpoint and 'model' in checkpoint['config']:
             vae_config = checkpoint['config']['model']
+            model_type = vae_config.get('type', 'vae')  # Check model type from checkpoint
+            print(f"Loaded model type from checkpoint: {model_type}")
             print(f"Loaded model config from checkpoint: {vae_config}")
         else:
             print("Warning: Model config not found; using default parameters")
@@ -350,13 +358,26 @@ def validate_vae_reconstruction(
             loss_cfg = (checkpoint.get('config', {}) or {}).get('loss', {}) or {}
             use_sigmoid = (loss_cfg.get('reconstruction_type', 'mse') == 'bce_logits')
     
-    from .models import VAE
-    vae = VAE(
-        input_channels=vae_config['input_channels'],
-        latent_channels=vae_config['latent_channels'],
-        base_channels=vae_config['base_channels'],
-        levels=vae_config['levels']
-    )
+    # Load the appropriate model based on type
+    if model_type == 'unet_vae':
+        from .models import UNetVAE
+        vae = UNetVAE(
+            input_channels=vae_config['input_channels'],
+            latent_channels=vae_config['latent_channels'],
+            base_channels=vae_config['base_channels'],
+            levels=vae_config['levels'],
+            norm_groups=vae_config.get('norm_groups', 8)
+        )
+        print("Using UNetVAE model")
+    else:
+        from .models import VAE
+        vae = VAE(
+            input_channels=vae_config['input_channels'],
+            latent_channels=vae_config['latent_channels'],
+            base_channels=vae_config['base_channels'],
+            levels=vae_config['levels']
+        )
+        print("Using regular VAE model")
     vae.load_state_dict(checkpoint['model_state_dict'])
     vae = vae.to(device_obj)
     vae.eval()
