@@ -5,8 +5,9 @@ import torch.nn as nn
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Union
 import json
+from tqdm import tqdm
 
-from ..models import VAE, DDPM
+from ..models import VAE, UNetVAE, DDPM
 from ..models.conditioning import (
     ConcatenationConditioning,
     CrossAttentionConditioning,
@@ -21,7 +22,7 @@ class Sampler:
     
     def __init__(
         self,
-        vae: VAE,
+        vae: Union[VAE, UNetVAE],
         ddpm: DDPM,
         conditioning_strategy: str,
         device: torch.device
@@ -46,17 +47,31 @@ class Sampler:
         vae_path = Path(vae_path)
         ddpm_path = Path(ddpm_path)
         
-        # Load VAE
+        # Load VAE checkpoint
         vae_checkpoint = torch.load(vae_path, map_location='cpu')
         vae_config = vae_checkpoint['config']['model']
         
-        vae = VAE(
-            input_channels=vae_config['input_channels'],
-            latent_dim=vae_config['latent_dim'],
-            latent_spatial_size=tuple(vae_config['latent_spatial_size']),
-            encoder_channels=vae_config['encoder_channels'],
-            decoder_channels=vae_config['decoder_channels']
-        )
+        # Detect model type (default to 'vae' for backward compatibility)
+        model_type = vae_config.get('type', 'vae')
+        
+        # Load the appropriate VAE model
+        if model_type == 'unet_vae':
+            print(f"Loading UNetVAE model from {vae_path}")
+            vae = UNetVAE(
+                input_channels=vae_config['input_channels'],
+                latent_channels=vae_config['latent_channels'],
+                base_channels=vae_config['base_channels'],
+                levels=vae_config['levels'],
+                norm_groups=vae_config.get('norm_groups', 8)
+            )
+        else:
+            print(f"Loading regular VAE model from {vae_path}")
+            vae = VAE(
+                input_channels=vae_config['input_channels'],
+                latent_channels=vae_config['latent_channels'],
+                base_channels=vae_config['base_channels'],
+                levels=vae_config['levels']
+            )
         vae.load_state_dict(vae_checkpoint['model_state_dict'])
         
         # Load DDPM
@@ -170,11 +185,13 @@ class Sampler:
                 latents = self.ddpm.p_sample_loop(latent_shape, conditioning_tensor)
             
             # Decode to voxel space
+            print("Decoding latents to voxel space...")
             voxels = self.vae.decode(latents)
+            voxels = torch.sigmoid(voxels)
             
             # Convert to VoxelGrid objects
             voxel_grids = []
-            for i in range(num_samples):
+            for i in tqdm(range(num_samples), desc="Creating VoxelGrid objects"):
                 voxel_grid = VoxelGrid(
                     data=voxels[i],
                     voxel_size=1.0,  # Default voxel size
@@ -213,7 +230,9 @@ class Sampler:
         x = torch.randn(shape, device=device)
         
         # Reverse diffusion with custom steps
-        for i, t in enumerate(timesteps):
+        sampling_type = "DDIM" if eta > 0 else "DDPM"
+        pbar = tqdm(enumerate(timesteps), total=len(timesteps), desc=f"{sampling_type} sampling")
+        for i, t in pbar:
             t_batch = torch.full((b,), t, device=device, dtype=torch.long)
             
             # Predict noise
@@ -240,6 +259,9 @@ class Sampler:
                     x = torch.sqrt(alpha_t_prev) * pred_x0 + torch.sqrt(1 - alpha_t_prev) * noise
                 else:
                     x = pred_x0
+            
+            # Update progress bar
+            pbar.set_postfix({'timestep': t.item()})
         
         return x
     
@@ -267,7 +289,7 @@ class Sampler:
             channel_names=channel_names,
             voxel_size_nm=voxel_grids[0].voxel_size
         ) as writer:
-            for i, voxel_grid in enumerate(voxel_grids):
+            for i, voxel_grid in tqdm(enumerate(voxel_grids), total=n_structures, desc="Saving structures"):
                 writer.add_structure(i, voxel_grid, voxel_grid.metadata or {})
         
         # Save parameters separately if requested

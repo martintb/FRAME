@@ -2,6 +2,7 @@
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from typing import Dict, Any, Optional
 from .base import ConditioningStrategy
 
@@ -59,7 +60,7 @@ class AdaptiveGroupNorm(nn.Module):
         return x_adapted
 
 
-class AdaptiveNormalizationConditioning(ConditioningStrategy):
+class AdaptiveNormalizationConditioning(nn.Module, ConditioningStrategy):
     """Adaptive normalization-based parameter conditioning strategy."""
     
     def __init__(

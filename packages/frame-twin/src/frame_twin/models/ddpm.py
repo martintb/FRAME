@@ -5,7 +5,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 from typing import Tuple, Optional, List
+from tqdm import tqdm
 from .conditioning import ConditioningStrategy
+try:
+    # Optional import for type check without creating a hard dependency
+    from .conditioning.concat import ConcatenationConditioning  # type: ignore
+except Exception:  # pragma: no cover - safe fallback if import path changes
+    ConcatenationConditioning = None  # type: ignore
 
 
 def get_beta_schedule(schedule: str, timesteps: int) -> torch.Tensor:
@@ -181,6 +187,7 @@ class UNet3D(nn.Module):
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.model_channels = model_channels
+        self.out_channels_mult = out_channels_mult
         self.num_res_blocks = num_res_blocks
         self.attention_resolutions = attention_resolutions
         
@@ -229,11 +236,9 @@ class UNet3D(nn.Module):
         for i, mult in enumerate(reversed(out_channels_mult)):
             out_ch = model_channels * mult
             
-            # Upsample
+            # Upsample (skip for first level)
             if i > 0:
                 self.up_samples.append(nn.ConvTranspose3d(ch, ch, 3, stride=2, padding=1, output_padding=1))
-            else:
-                self.up_samples.append(nn.Identity())
             
             # Residual blocks
             for j in range(num_res_blocks + 1):
@@ -265,14 +270,16 @@ class UNet3D(nn.Module):
         
         # Downsampling
         hs = [h]
+        level_skips: List[torch.Tensor] = []
         block_idx = 0
         sample_idx = 0
+        ds = 1
         
-        for i, mult in enumerate(out_channels_mult):
-            out_ch = model_channels * mult
+        for i, mult in enumerate(self.out_channels_mult):
+            out_ch = self.model_channels * mult
             
             # Residual blocks
-            for _ in range(num_res_blocks):
+            for _ in range(self.num_res_blocks):
                 if block_idx < len(self.down_blocks):
                     block = self.down_blocks[block_idx]
                     if isinstance(block, ResidualBlock3D):
@@ -283,13 +290,16 @@ class UNet3D(nn.Module):
                     hs.append(h)
             
             # Attention
-            if ds in attention_resolutions and block_idx < len(self.down_blocks):
+            if ds in self.attention_resolutions and block_idx < len(self.down_blocks):
                 block = self.down_blocks[block_idx]
                 h = block(h)
                 block_idx += 1
             
+            # Save level skip AFTER finishing blocks/attention for this level
+            level_skips.append(h)
+
             # Downsample (except last)
-            if i < len(out_channels_mult) - 1:
+            if i < len(self.out_channels_mult) - 1:
                 if sample_idx < len(self.down_samples):
                     h = self.down_samples[sample_idx](h)
                     sample_idx += 1
@@ -304,8 +314,8 @@ class UNet3D(nn.Module):
         block_idx = 0
         sample_idx = 0
         
-        for i, mult in enumerate(reversed(out_channels_mult)):
-            out_ch = model_channels * mult
+        for i, mult in enumerate(reversed(self.out_channels_mult)):
+            out_ch = self.model_channels * mult
             
             # Upsample
             if i > 0:
@@ -314,20 +324,24 @@ class UNet3D(nn.Module):
                     sample_idx += 1
             
             # Residual blocks
-            for j in range(num_res_blocks + 1):
+            for j in range(self.num_res_blocks + 1):
                 if block_idx < len(self.up_blocks):
                     block = self.up_blocks[block_idx]
                     if isinstance(block, ResidualBlock3D):
-                        # Skip connection
-                        if j == 0 and len(hs) > 1:
-                            h = torch.cat([h, hs.pop()], dim=1)
+                        # Use one skip per level captured at encoder stage
+                        if j == 0 and len(level_skips) > 0:
+                            skip = level_skips.pop()
+                            # Ensure spatial dims match
+                            if h.shape[2:] != skip.shape[2:]:
+                                h = F.interpolate(h, size=skip.shape[2:], mode='trilinear', align_corners=False)
+                            h = torch.cat([h, skip], dim=1)
                         h = block(h, time_emb, conditioning)
                     else:  # AttentionBlock3D
                         h = block(h)
                     block_idx += 1
             
             # Attention
-            if ds in attention_resolutions and block_idx < len(self.up_blocks):
+            if ds in self.attention_resolutions and block_idx < len(self.up_blocks):
                 block = self.up_blocks[block_idx]
                 h = block(h)
                 block_idx += 1
@@ -388,8 +402,16 @@ class DDPM(nn.Module):
         if conditioning_strategy is not None:
             conditioning_dim = conditioning_strategy.get_conditioning_dim()
         
+        # Determine U-Net input channels. For concatenation-based conditioning,
+        # the conditioning tensor is concatenated to x along the channel axis,
+        # so U-Net must accept latent_channels + conditioning_dim inputs.
+        unet_in_channels = latent_channels
+        if conditioning_dim is not None and ConcatenationConditioning is not None \
+           and isinstance(conditioning_strategy, ConcatenationConditioning):
+            unet_in_channels = latent_channels + conditioning_dim
+
         self.unet = UNet3D(
-            in_channels=latent_channels,
+            in_channels=unet_in_channels,
             out_channels=latent_channels,
             model_channels=unet_channels[0],
             out_channels_mult=[c // unet_channels[0] for c in unet_channels],
@@ -444,7 +466,8 @@ class DDPM(nn.Module):
         x = torch.randn(shape, device=device)
         
         # Reverse diffusion
-        for i in reversed(range(self.timesteps)):
+        timestep_range = list(reversed(range(self.timesteps)))
+        for i in tqdm(timestep_range, desc="DDPM sampling"):
             t = torch.full((b,), i, device=device, dtype=torch.long)
             x = self.p_sample(x, t, conditioning)
         

@@ -7,14 +7,15 @@ description = "Generate new LNP structures with parameter conditioning"
 random_seed = 42
 
 [model]
-vae_checkpoint = "./checkpoints/vae/best_model.pt"
-ddpm_checkpoint = "./checkpoints/ddpm/best_model.pt"
+vae_checkpoint = "./output/lnp_5k_10ch/checkpoints_v2/unet_vae_5k_3l_l8_b16/best_model.pt"
+ddpm_checkpoint = "./output/lnp_5k_10ch/checkpoints_v2/ddpm_unetvae_concat/best_model.pt"
 conditioning_strategy = "concat"
 
 [sampling]
-num_samples = 100
-ddpm_steps = 1000
+num_samples = 1
+ddpm_steps = 10000
 eta = 0.0  # DDPM sampling parameter (0.0 = DDPM, 1.0 = DDIM)
+device = "mps"  # Device for inference: "auto", "cuda", "mps", or "cpu"
 
 [conditioning]
 # Specify known parameters (use empty string for mask tokens)

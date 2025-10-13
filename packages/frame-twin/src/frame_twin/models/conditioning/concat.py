@@ -6,7 +6,7 @@ from typing import Dict, Any, Optional
 from .base import ConditioningStrategy
 
 
-class ConcatenationConditioning(ConditioningStrategy):
+class ConcatenationConditioning(nn.Module, ConditioningStrategy):
     """Concatenation-based parameter conditioning strategy."""
     
     def __init__(

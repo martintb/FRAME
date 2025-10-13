@@ -15,6 +15,7 @@ conditioning_strategy = "concat"
 num_samples = 100
 ddpm_steps = 1000
 eta = 0.0  # DDPM sampling parameter (0.0 = DDPM, 1.0 = DDIM)
+device = "auto"  # Device for inference: "auto", "cuda", "mps", or "cpu"
 
 [conditioning]
 # Specify known parameters (use empty string for mask tokens)

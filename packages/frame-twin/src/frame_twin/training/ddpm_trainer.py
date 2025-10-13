@@ -4,11 +4,12 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from typing import Dict, Any, Optional
+import numpy as np
 
 from .base_trainer import BaseTrainer
 from ..losses import DDPMLoss
 from ..config import DDPMConfig
-from ..models import VAE, DDPM
+from ..models import VAE, UNetVAE, DDPM
 from ..models.conditioning import (
     ConcatenationConditioning,
     CrossAttentionConditioning,
@@ -20,17 +21,30 @@ class DDPMTrainer(BaseTrainer):
     """Trainer for DDPM models."""
     
     def __init__(self, config: DDPMConfig):
-        # Load VAE
+        # Load VAE (supports both VAE and UNetVAE)
         vae_checkpoint = torch.load(config.model.vae_checkpoint, map_location='cpu')
         vae_config = vae_checkpoint['config']['model']
         
-        vae = VAE(
-            input_channels=vae_config['input_channels'],
-            latent_dim=vae_config['latent_dim'],
-            latent_spatial_size=tuple(vae_config['latent_spatial_size']),
-            encoder_channels=vae_config['encoder_channels'],
-            decoder_channels=vae_config['decoder_channels']
-        )
+        # Detect model type and instantiate accordingly
+        model_type = vae_config.get('type', 'vae')
+        
+        if model_type == 'unet_vae':
+            vae = UNetVAE(
+                input_channels=vae_config['input_channels'],
+                latent_channels=vae_config['latent_channels'],
+                base_channels=vae_config['base_channels'],
+                levels=vae_config['levels'],
+                norm_groups=vae_config.get('norm_groups', 8)
+            )
+        else:  # 'vae'
+            vae = VAE(
+                input_channels=vae_config['input_channels'],
+                latent_dim=vae_config['latent_dim'],
+                latent_spatial_size=tuple(vae_config['latent_spatial_size']),
+                encoder_channels=vae_config['encoder_channels'],
+                decoder_channels=vae_config['decoder_channels']
+            )
+        
         vae.load_state_dict(vae_checkpoint['model_state_dict'])
         
         if config.model.freeze_vae:
@@ -104,6 +118,10 @@ class DDPMTrainer(BaseTrainer):
         self.config = config
         self.vae = vae.to(device)
         self.conditioning_strategy = conditioning_strategy
+        
+        # Move conditioning strategy to device (it has trainable parameters)
+        if self.conditioning_strategy is not None:
+            self.conditioning_strategy.to(device)
     
     def _create_conditioning_strategy(self, config: DDPMConfig):
         """Create conditioning strategy based on config."""
@@ -285,3 +303,108 @@ class DDPMTrainer(BaseTrainer):
             'attention_resolutions': self.config.model.attention_resolutions,
             'conditioning': self.config.model.conditioning.dict()
         }
+    
+    def _log_reconstruction_images(self, batch: Dict[str, Any], metrics: Dict[str, float], step: int):
+        """Log generated samples and comparison with real data to tensorboard."""
+        if self.writer is None:
+            return
+        if 'voxels' not in batch:
+            return
+        
+        voxels = batch['voxels']  # (B, C, D, H, W)
+        parameters = batch.get('parameters', None)
+        
+        # Use only first sample for visualization
+        n_samples = 1
+        
+        # Encode conditioning from first sample if available
+        conditioning_tensor = None
+        if parameters is not None and len(parameters) > 0:
+            conditioning_tensor = self.conditioning_strategy.encode_parameters(
+                parameters[0], self.device
+            ).unsqueeze(0)  # Add batch dimension
+        
+        # Set models to eval mode
+        self.model.eval()
+        self.vae.eval()
+        
+        with torch.no_grad():
+            # 1. Encode real voxel to latent space
+            real_voxel = voxels[0:1]  # Take first sample, keep batch dim
+            real_latent = self.vae.encode(real_voxel)
+            
+            # 2. Generate sample from DDPM in latent space
+            latent_shape = (n_samples, self.model.latent_channels, 16, 16, 16)
+            generated_latent = self.model.p_sample_loop(latent_shape, conditioning_tensor)
+            
+            # 3. Decode both to voxel space
+            reconstructed_voxel = self.vae.decode(real_latent, skips=None)
+            generated_voxel = self.vae.decode(generated_latent, skips=None)
+        
+        # Set models back to train mode
+        self.model.train()
+        if not self.config.model.freeze_vae:
+            self.vae.train()
+        
+        # Move to CPU and extract single samples
+        real_vox = real_voxel[0].cpu()        # (C, D, H, W)
+        recon_vox = reconstructed_voxel[0].cpu()  # (C, D, H, W)
+        gen_vox = generated_voxel[0].cpu()    # (C, D, H, W)
+        
+        # Compute center slice index
+        D = real_vox.shape[1]
+        zc = D // 2
+        
+        # Compute argmax over channels for each
+        real_argmax = torch.argmax(real_vox, dim=0)[zc].numpy().astype(np.float32)      # (H, W)
+        recon_argmax = torch.argmax(recon_vox, dim=0)[zc].numpy().astype(np.float32)    # (H, W)
+        gen_argmax = torch.argmax(gen_vox, dim=0)[zc].numpy().astype(np.float32)        # (H, W)
+        
+        # Normalize for visualization
+        vmax = max(real_argmax.max(), recon_argmax.max(), gen_argmax.max(), 1.0)
+        
+        # Log images to tensorboard
+        self.writer.add_image(
+            'ddpm/real_data_argmax_center', 
+            real_argmax[None, ...] / vmax, 
+            step, 
+            dataformats='CHW'
+        )
+        self.writer.add_image(
+            'ddpm/vae_reconstruction_argmax_center', 
+            recon_argmax[None, ...] / vmax, 
+            step, 
+            dataformats='CHW'
+        )
+        self.writer.add_image(
+            'ddpm/ddpm_generated_argmax_center', 
+            gen_argmax[None, ...] / vmax, 
+            step, 
+            dataformats='CHW'
+        )
+        
+        # Compute and log differences
+        diff_real_recon = (recon_argmax - real_argmax).astype(np.float32)
+        diff_real_gen = (gen_argmax - real_argmax).astype(np.float32)
+        
+        # Normalize differences for visualization (map to 0..1)
+        max_abs = max(
+            abs(diff_real_recon.min()), abs(diff_real_recon.max()),
+            abs(diff_real_gen.min()), abs(diff_real_gen.max()),
+            1.0
+        )
+        diff_real_recon_norm = (diff_real_recon / max_abs) * 0.5 + 0.5
+        diff_real_gen_norm = (diff_real_gen / max_abs) * 0.5 + 0.5
+        
+        self.writer.add_image(
+            'ddpm/diff_real_vae_recon_bwr', 
+            diff_real_recon_norm[None, ...], 
+            step, 
+            dataformats='CHW'
+        )
+        self.writer.add_image(
+            'ddpm/diff_real_ddpm_gen_bwr', 
+            diff_real_gen_norm[None, ...], 
+            step, 
+            dataformats='CHW'
+        )

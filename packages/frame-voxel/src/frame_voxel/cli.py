@@ -40,6 +40,9 @@ def main():
     napari_parser.add_argument(
         "--opacity", type=float, default=0.25, help="Default opacity for all channels (default: 0.25)"
     )
+    napari_parser.add_argument(
+        "--sigmoid", action="store_true", help="Apply sigmoid activation to voxel data before visualization"
+    )
 
     # Info command
     info_parser = subparsers.add_parser(
@@ -119,7 +122,10 @@ def view_napari_command(args):
             print(json.dumps(params, indent=2, sort_keys=True))
         except Exception:
             pass
-        
+    
+        if args.sigmoid:
+            voxel_grid.data = torch.sigmoid(voxel_grid.data)
+
         # Prepare channel selection
         print("Opening napari in 3D viewer mode...")
         NapariViewer.view_structure(

@@ -7,7 +7,7 @@ description = "DDPM training with concatenation conditioning for LNP structures"
 random_seed = 42
 
 [data]
-voxel_library_path = "./output/lnp/voxels.zarr"
+voxel_library_path = "./output/lnp_5k_10ch/voxels.zarr"
 split_strategy = "random"
 train_ratio = 0.8
 val_ratio = 0.1
@@ -16,14 +16,12 @@ test_ratio = 0.1
 [model]
 type = "ddpm"
 conditioning_strategy = "concat"  # "concat", "cross_attention", or "adaptive_norm"
-vae_checkpoint = "./checkpoints/vae/best_model.pt"
+vae_checkpoint = "./output/lnp_5k_10ch/checkpoints_v2/unet_vae_5k_3l_l8_b16/best_model.pt"
 freeze_vae = true
-
-[model.ddpm]
-latent_channels = 32
+latent_channels = 8
 timesteps = 1000
 beta_schedule = "linear"  # or "cosine"
-unet_channels = [32, 64, 128, 256]
+unet_channels = [16, 32, 64, 128]
 attention_resolutions = [8, 16]
 
 [model.conditioning]
@@ -36,11 +34,12 @@ param_embedding_dim = 128
 # use_adaptive_group_norm = true
 
 [training]
-device = "cuda"
+device = "mps"
 distributed = false
 num_epochs = 200
-batch_size = 8
-learning_rate = 1e-4
+num_workers = 0
+batch_size = 2
+learning_rate = 2e-4
 optimizer = "adam"
 scheduler = "cosine"
 
@@ -48,12 +47,13 @@ scheduler = "cosine"
 loss_type = "mse"  # "mse" or "mae"
 
 [checkpointing]
-output_dir = "./checkpoints/ddpm"
-save_every_epochs = 20
-save_every_minutes = 120
+output_dir = "./output/lnp_5k_10ch/checkpoints_v2/ddpm_unetvae_concat"
+save_every_epochs = 1
+save_every_minutes = 60
 keep_last_n = 3
 save_best = true
 
 [logging]
-log_every_steps = 100
-tensorboard_dir = "./logs/ddpm"
+log_every_steps = 25
+tensorboard_dir = "./output/lnp_5k_10ch/logs_v2/ddpm_unetvae_concat"
+n_recon_compare = 25  # Log generated samples every N steps

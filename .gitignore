@@ -11,6 +11,7 @@ output/
 outputs/
 data/
 visualizations/
+generated_structures/
 
 # Logs
 logs/

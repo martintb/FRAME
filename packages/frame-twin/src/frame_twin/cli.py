@@ -216,11 +216,26 @@ def generate_structures(config_path: str):
     print(f"Loading inference config from {config_path}")
     config = InferenceConfig.from_toml(config_path)
     
+    # Determine device
+    device_str = config.sampling.device
+    if device_str == 'auto':
+        if torch.cuda.is_available():
+            device = torch.device('cuda')
+        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            device = torch.device('mps')
+        else:
+            device = torch.device('cpu')
+    else:
+        device = torch.device(device_str)
+    
+    print(f"Using device: {device}")
+    
     print("Loading trained models...")
     from .inference import Sampler
     sampler = Sampler.from_checkpoints(
         vae_path=config.model['vae_checkpoint'],
-        ddpm_path=config.model['ddpm_checkpoint']
+        ddpm_path=config.model['ddpm_checkpoint'],
+        device=device
     )
     
     print("Generating structures...")

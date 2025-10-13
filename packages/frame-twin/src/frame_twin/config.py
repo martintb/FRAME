@@ -132,6 +132,7 @@ class SamplingConfig(BaseModel):
     num_samples: int = Field(gt=0)
     ddpm_steps: int = Field(gt=0)
     eta: float = Field(0.0, ge=0.0, le=1.0)
+    device: str = Field(default="auto", description="Device to run inference on: 'auto', 'cuda', 'mps', or 'cpu'")
 
 
 class ConditioningConfig(BaseModel):

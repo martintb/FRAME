@@ -81,7 +81,7 @@ class CrossAttentionLayer(nn.Module):
         return x + attn_output
 
 
-class CrossAttentionConditioning(ConditioningStrategy):
+class CrossAttentionConditioning(nn.Module, ConditioningStrategy):
     """Cross-attention-based parameter conditioning strategy."""
     
     def __init__(
