@@ -187,7 +187,6 @@ class Sampler:
             # Decode to voxel space
             print("Decoding latents to voxel space...")
             voxels = self.vae.decode(latents)
-            voxels = torch.sigmoid(voxels)
             
             # Convert to VoxelGrid objects
             voxel_grids = []
