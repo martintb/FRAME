@@ -438,17 +438,22 @@ class DDPM(nn.Module):
         return self.unet(x, t, conditioning)
     
     def p_sample(self, x: torch.Tensor, t: torch.Tensor, conditioning: Optional[torch.Tensor] = None) -> torch.Tensor:
-        """Sample from p(x_{t-1} | x_t)."""
+        """Sample from p(x_{t-1} | x_t).
+        
+        Uses the epsilon-prediction formulation:
+        μ_θ(x_t, t) = (1/√α_t) * (x_t - (β_t/√(1-ᾱ_t)) * ε_θ(x_t, t))
+        """
         # Predict noise
         predicted_noise = self.predict_noise(x, t, conditioning)
         
-        # Calculate coefficients
-        posterior_mean_coef1 = self.posterior_mean_coef1[t].reshape(-1, 1, 1, 1, 1)
-        posterior_mean_coef2 = self.posterior_mean_coef2[t].reshape(-1, 1, 1, 1, 1)
+        # Calculate coefficients for epsilon-prediction formula
+        sqrt_alpha_t = torch.sqrt(self.alphas[t]).reshape(-1, 1, 1, 1, 1)
+        sqrt_one_minus_alphas_cumprod_t = self.sqrt_one_minus_alphas_cumprod[t].reshape(-1, 1, 1, 1, 1)
+        beta_t = self.betas[t].reshape(-1, 1, 1, 1, 1)
         posterior_variance = self.posterior_variance[t].reshape(-1, 1, 1, 1, 1)
         
-        # Calculate mean
-        posterior_mean = posterior_mean_coef1 * x + posterior_mean_coef2 * predicted_noise
+        # Calculate mean using epsilon-prediction formula
+        posterior_mean = (x - (beta_t / sqrt_one_minus_alphas_cumprod_t) * predicted_noise) / sqrt_alpha_t
         
         # Sample
         if t[0] == 0:
