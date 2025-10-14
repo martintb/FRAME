@@ -13,8 +13,8 @@ from ..models.conditioning import (
     CrossAttentionConditioning,
     AdaptiveNormalizationConditioning
 )
-from frame_voxel.storage import VoxelLibrary, VoxelLibraryWriter
-from frame_voxel.voxel_grid import VoxelGrid
+from frame.storage import VoxelLibrary, VoxelLibraryWriter
+from frame.voxel_grid import VoxelGrid
 
 
 class Sampler:

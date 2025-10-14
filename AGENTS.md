@@ -25,10 +25,15 @@ This is a **uv workspace** with three core packages:
 ```
 frame/
 ├── apps/                    # Runnable CLIs/services
+├── config/                  # Workspace configuration
+│   └── config.toml         # FRAME core configuration
 ├── packages/
-│   ├── frame-core/         # Data models, serialization, visualization
+│   ├── frame-core/         # Data models, storage, experiment management, unified CLI
 │   ├── frame-geo/          # Stochastic geometry ("cartoon generator")
 │   └── frame-twin/         # Diffusion model (training & inference)
+├── frame_data/             # Default data root (libraries and experiments)
+│   ├── libraries/          # UUID-tracked data libraries
+│   └── experiments/        # UUID-tracked experiments and checkpoints
 ├── dev/                    # Local development sandbox (gitignored)
 ├── scripts/                # Utility scripts
 ├── docs/                   # MkDocs documentation
@@ -41,24 +46,51 @@ frame/
 ## Package Responsibilities
 
 ### `frame-core` ✅ IMPLEMENTED
-**Purpose**: Foundation for data representation and I/O
+**Purpose**: Foundation for data representation, I/O, and experiment management
 
 - **Base Data Model**: Multi-channel 3D voxel grids
   - PyTorch tensor-based: `VoxelGrid` class with shape `(C, D, H, W)`
   - Default: 128³ grid, 1 nm³ per voxel (configurable)
   - Channels: 10-20 different material/property channels
   - Support for arbitrary grid sizes and voxel dimensions
-- **Implemented Features**:
+
+- **Data Management**:
+  - ✅ `LibraryManager` - UUID-based library tracking and management
+  - ✅ `ExperimentManager` - Experiment tracking with checkpoint management
+  - ✅ `CheckpointManager` - Model checkpoint versioning
+  - ✅ Immutable libraries with lineage tracking
+  - ✅ Tag-based search and filtering
+  - ✅ Write protection for data integrity
+
+- **Storage & I/O**:
   - ✅ `VoxelGrid` data model with validation and metadata
   - ✅ `VoxelLibrary` for Zarr-based storage with lazy loading
   - ✅ `VoxelDataset` for PyTorch training integration
   - ✅ Parameter-based filtering and batch loading
+  - ✅ Efficient memory management with lazy loading
+
+- **Visualization**:
   - ✅ Three visualization backends:
     - `visualize_napari.py` - Interactive 3D viewer
     - `visualize_pyvista.py` - High-quality 3D rendering
     - `visualize_batch.py` - Batch visualization utilities
-  - ✅ Efficient memory management with lazy loading
-  - ✅ Comprehensive test coverage
+
+- **Unified CLI**:
+  - ✅ `uv run frame` - Central command integrating all packages
+  - ✅ Library management commands (list, show, search, tag)
+  - ✅ Experiment management commands (list, show, tag)
+  - ✅ Checkpoint management (list, show, set-best)
+  - ✅ TensorBoard launcher
+  - ✅ Migration tools for legacy data
+  - ✅ Integrates frame-geo and frame-twin commands
+
+- **Migration Tools**:
+  - ✅ Automatic migration of old data structures
+  - ✅ Specialized migration for lnp_5k_10ch
+  - ✅ Validation with error reporting
+  - ✅ Dry-run mode for testing
+
+**Module**: `from frame import ...` (not `frame_core`)
 
 ### `frame-geo` ✅ IMPLEMENTED
 **Purpose**: Stochastic geometry generator for training data
@@ -191,12 +223,46 @@ uv run python scripts/train.py
   - Property-based tests for geometry validation (consider `hypothesis`)
 
 ### Common Commands
+
+**Unified CLI** (`frame` replaces individual package CLIs):
+```bash
+# Library management
+uv run frame library list
+uv run frame library show <uuid>
+uv run frame library search --tag production
+
+# Experiment management
+uv run frame experiment list --model-type vae
+uv run frame experiment show <uuid>
+uv run frame tensorboard <experiment_uuid>
+
+# Migration
+uv run frame migrate output/lnp_5k_10ch --tags production,lnp,10ch
+
+# Geometry generation (frame-geo integration)
+uv run frame geo generate config.toml
+uv run frame geo list-types
+
+# Twin training (frame-twin integration)
+uv run frame twin train-vae config.toml
+uv run frame twin train-ddpm config.toml
+uv run frame twin generate config.toml
+```
+
+**Legacy CLIs** (still available):
+```bash
+# Individual package CLIs still work
+uv run frame-geo generate config.toml
+uv run frame-twin train-vae config.toml
+```
+
+**Testing**:
 ```bash
 # Run tests
 uv run pytest
 
 # Run tests with coverage
-uv run pytest --cov=frame_core --cov=frame_geo --cov=frame_twin
+uv run pytest --cov=frame --cov=frame_geo --cov=frame_twin
 
 # Format/lint (configure in root pyproject.toml)
 uv run ruff check .
@@ -536,34 +602,41 @@ The next package to implement will be `frame-twin`, which will:
 
 | Package | Status | Lines of Code | Tests | Key Features |
 |---------|--------|---------------|-------|--------------|
-| **frame-core** | ✅ Complete | ~600 | 15+ | VoxelGrid, VoxelLibrary, VoxelDataset, 3 visualization backends |
-| **frame-geo** | ✅ Complete | ~2000 | 25 | LNP generator, PyMC priors, 7 validators, hybrid voxelization, CLI |
-| **frame-twin** | ✅ Complete | ~1500 | 0 | VAE+DDPM models, 3 conditioning strategies, training infrastructure, CLI |
+| **frame-core** | ✅ Complete | ~3500 | 0 | VoxelGrid, VoxelLibrary, LibraryManager, ExperimentManager, unified CLI, migration |
+| **frame-geo** | ✅ Complete | ~2000 | 25 | LNP generator, PyMC priors, 7 validators, hybrid voxelization, CLI integration |
+| **frame-twin** | ✅ Complete | ~1500 | 3 | VAE+DDPM models, 3 conditioning strategies, training infrastructure, CLI integration |
 | **Virtual Instruments** | 🚧 Pending | 0 | 0 | Awaiting implementation |
 
 **Current Capabilities**:
-- ✅ Generate synthetic LNP structures from statistical priors
-- ✅ Validate physical constraints with 7 validators
-- ✅ Voxelize to multi-channel 3D grids (volume fractions)
-- ✅ Store efficiently in Zarr format with lazy loading
-- ✅ Load and visualize structures (napari, PyVista)
-- ✅ PyTorch dataset integration for training
-- ✅ Comprehensive statistics and quality control
-- ✅ Train VAE models for voxel compression
-- ✅ Train DDPM models with parameter conditioning
-- ✅ Generate new structures with partial parameter specification
-- ✅ Comprehensive checkpointing and training infrastructure
+- ✅ **Data Management**: UUID-based library and experiment tracking
+- ✅ **Unified CLI**: Central `frame` command integrating all packages
+- ✅ **Library Management**: Create, list, search, and tag data libraries
+- ✅ **Experiment Tracking**: Track training experiments, checkpoints, and dependencies
+- ✅ **Migration Tools**: Automatic migration of legacy data with validation
+- ✅ **Generate synthetic LNP structures** from statistical priors
+- ✅ **Validate physical constraints** with 7 validators
+- ✅ **Voxelize** to multi-channel 3D grids (volume fractions)
+- ✅ **Store efficiently** in Zarr format with UUID tracking
+- ✅ **Visualize structures** (napari, PyVista)
+- ✅ **PyTorch dataset integration** for training
+- ✅ **Train VAE models** for voxel compression
+- ✅ **Train DDPM models** with parameter conditioning
+- ✅ **Generate new structures** with partial parameter specification
+- ✅ **TensorBoard integration** for monitoring training
 
 **Next Steps**:
 - 🚧 Add virtual instrument packages (SAXS, SANS, cryo-EM)
 - 🚧 Implement refinement algorithms
-- 🚧 Add comprehensive test coverage for frame-twin
+- 🚧 Add comprehensive test coverage for frame-core and frame-twin
+- 🚧 Complete migration of lnp_5k_10ch data
 
 ---
 
-**Last Updated**: 2025-01-27  
+**Last Updated**: 2025-10-13  
 **Workspace Manager**: `uv`  
 **Primary Framework**: PyTorch  
+**Primary CLI**: `uv run frame` (unified command)  
 **Initial Target**: Lipid nanoparticles × (SAXS, SANS, cryo-EM)  
-**Implementation Progress**: 3/4 core packages complete (75%)
+**Implementation Progress**: 3/4 core packages complete (75%)  
+**Note**: `frame-voxel` has been replaced by `frame-core` with expanded functionality
 

@@ -13,7 +13,37 @@ except Exception:  # pragma: no cover - fallback for older runtimes
 from .config import VAEConfig, DDPMConfig, InferenceConfig
 from .training import VAETrainer
 from .data import create_data_splits, create_data_loaders
-from frame_voxel.storage import VoxelLibrary
+from frame.storage import VoxelLibrary
+
+
+def register_subcommands(subparsers):
+    """Register frame-twin subcommands with the main frame CLI.
+    
+    Args:
+        subparsers: The subparsers object from the main argument parser
+    """
+    # Create 'twin' subcommand
+    twin_parser = subparsers.add_parser("twin", help="Digital twin (frame-twin)")
+    twin_subparsers = twin_parser.add_subparsers(dest="twin_command", help="Twin commands")
+    
+    # Train VAE command
+    train_vae_parser = twin_subparsers.add_parser('train-vae', help='Train VAE model')
+    train_vae_parser.add_argument('config', help='Path to VAE training config TOML file')
+    train_vae_parser.add_argument('--resume', help='Path to checkpoint to resume from')
+    
+    # Train DDPM command
+    train_ddpm_parser = twin_subparsers.add_parser('train-ddpm', help='Train DDPM model')
+    train_ddpm_parser.add_argument('config', help='Path to DDPM training config TOML file')
+    train_ddpm_parser.add_argument('--resume', help='Path to checkpoint to resume from')
+    
+    # Generate command
+    generate_parser = twin_subparsers.add_parser('generate', help='Generate structures')
+    generate_parser.add_argument('config', help='Path to inference config TOML file')
+    
+    # Continue training command
+    continue_parser = twin_subparsers.add_parser('continue', help='Continue training from experiment')
+    continue_parser.add_argument('experiment_uuid', help='Experiment UUID to continue')
+    continue_parser.add_argument('--config', help='Optional updated config file')
 
 
 def main():
@@ -465,7 +495,7 @@ from pathlib import Path
 # Add the frame packages to the path
 sys.path.insert(0, "{Path(__file__).parent.parent.parent.parent}")
 
-from frame_voxel.visualize_napari import NapariViewer
+from frame.visualize_napari import NapariViewer
 
 # Load the voxel grid
 voxel_path = "{reconstructed_path}"
@@ -491,7 +521,7 @@ napari.run()
         
         # Open the original structure in the main process
         print("Opening original structure in napari...")
-        from frame_voxel.visualize_napari import NapariViewer
+        from frame.visualize_napari import NapariViewer
         
         original_viewer = NapariViewer.view_structure(
             voxel_grid=original_voxel,

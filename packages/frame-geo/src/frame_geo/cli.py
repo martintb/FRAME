@@ -15,6 +15,51 @@ from .voxelization.hybrid import HybridVoxelizer
 from .structures.lnp import LNPBuilder, LNPParameters
 
 
+def register_subcommands(subparsers):
+    """Register frame-geo subcommands with the main frame CLI.
+    
+    Args:
+        subparsers: The subparsers object from the main argument parser
+    """
+    # Create 'geo' subcommand
+    geo_parser = subparsers.add_parser("geo", help="Geometry generation (frame-geo)")
+    geo_subparsers = geo_parser.add_subparsers(dest="geo_command", help="Geo commands")
+    
+    # Generate command
+    generate_parser = geo_subparsers.add_parser(
+        "generate", help="Generate structures from configuration"
+    )
+    generate_parser.add_argument("config", type=str, help="Path to TOML configuration file")
+    generate_parser.add_argument(
+        "--parametric-only", action="store_true", help="Generate parametric structures only (no voxelization)"
+    )
+    
+    # Validate config command
+    validate_parser = geo_subparsers.add_parser(
+        "validate-config", help="Validate a configuration file"
+    )
+    validate_parser.add_argument("config", type=str, help="Path to TOML configuration file")
+    
+    # List structure types
+    list_parser = geo_subparsers.add_parser(
+        "list-types", help="List available structure types"
+    )
+    
+    # Visualize command  
+    visualize_parser = geo_subparsers.add_parser(
+        "visualize", help="Visualize parametric structures from Zarr storage"
+    )
+    visualize_parser.add_argument(
+        "structures_path", type=str, help="Path to structures.zarr directory"
+    )
+    visualize_parser.add_argument(
+        "--indices", type=int, nargs="+", help="Indices of structures to visualize"
+    )
+    visualize_parser.add_argument(
+        "--random", type=int, help="Number of random structures to visualize"
+    )
+
+
 def main():
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(

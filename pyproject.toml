@@ -2,9 +2,10 @@
 members = ["packages/*", "apps/*"]
 
 [tool.uv.sources]
-frame-voxel = { workspace = true }
+frame-core = { workspace = true }
 frame-geo = { workspace = true }
 frame-twin = { workspace = true }
+# frame-voxel = { workspace = true }  # Deprecated - replaced by frame-core
 
 [tool.uv]
 dev-dependencies = [

@@ -1,0 +1,20 @@
+# FRAME Configuration
+# This file configures the core data management system
+
+[frame]
+# Root directory for all FRAME data (libraries and experiments)
+data_root = "./frame_data"
+
+[frame.paths]
+# Specific paths for libraries and experiments
+# Variables like {data_root} will be expanded
+libraries = "{data_root}/libraries"
+experiments = "{data_root}/experiments"
+
+[frame.defaults]
+# Automatically migrate old data format when accessed
+auto_migrate = true
+
+# Strict validation - error if required metadata is missing
+strict_validation = true
+

@@ -1,0 +1,437 @@
+"""Unified CLI for FRAME framework."""
+
+import argparse
+import sys
+from pathlib import Path
+from typing import Optional
+
+from .management import (
+    LibraryManager,
+    ExperimentManager,
+    CheckpointManager,
+    LibrarySearch,
+    ExperimentSearch,
+    LineageTracker,
+)
+from .migration import migrate_library, migrate_lnp_5k_10ch
+
+
+def setup_library_commands(subparsers):
+    """Set up library management commands."""
+    library_parser = subparsers.add_parser("library", help="Library management")
+    lib_subparsers = library_parser.add_subparsers(dest="library_command")
+    
+    # List libraries
+    list_parser = lib_subparsers.add_parser("list", help="List all libraries")
+    list_parser.add_argument("--tag", action="append", dest="tags", help="Filter by tag")
+    
+    # Show library
+    show_parser = lib_subparsers.add_parser("show", help="Show library details")
+    show_parser.add_argument("uuid", help="Library UUID")
+    show_parser.add_argument("--show-structures", action="store_true", help="Show structures info")
+    show_parser.add_argument("--show-voxels", action="store_true", help="Show voxels info")
+    
+    # Search libraries
+    search_parser = lib_subparsers.add_parser("search", help="Search libraries")
+    search_parser.add_argument("--params", help="Parameter filter (e.g., 'shell1_radius_nm>50')")
+    search_parser.add_argument("--tag", action="append", dest="tags", help="Filter by tag")
+    search_parser.add_argument("--structure-type", help="Filter by structure type")
+    
+    # Tag management
+    tag_parser = lib_subparsers.add_parser("tag", help="Add tag to library")
+    tag_parser.add_argument("uuid", help="Library UUID")
+    tag_parser.add_argument("tag", help="Tag to add")
+    
+    untag_parser = lib_subparsers.add_parser("untag", help="Remove tag from library")
+    untag_parser.add_argument("uuid", help="Library UUID")
+    untag_parser.add_argument("tag", help="Tag to remove")
+
+
+def setup_experiment_commands(subparsers):
+    """Set up experiment management commands."""
+    exp_parser = subparsers.add_parser("experiment", help="Experiment management")
+    exp_subparsers = exp_parser.add_subparsers(dest="experiment_command")
+    
+    # List experiments
+    list_parser = exp_subparsers.add_parser("list", help="List all experiments")
+    list_parser.add_argument("--model-type", help="Filter by model type")
+    list_parser.add_argument("--tag", action="append", dest="tags", help="Filter by tag")
+    list_parser.add_argument("--status", help="Filter by status")
+    
+    # Show experiment
+    show_parser = exp_subparsers.add_parser("show", help="Show experiment details")
+    show_parser.add_argument("uuid", help="Experiment UUID")
+    
+    # Tag management
+    tag_parser = exp_subparsers.add_parser("tag", help="Add tag to experiment")
+    tag_parser.add_argument("uuid", help="Experiment UUID")
+    tag_parser.add_argument("tag", help="Tag to add")
+    
+    untag_parser = exp_subparsers.add_parser("untag", help="Remove tag from experiment")
+    untag_parser.add_argument("uuid", help="Experiment UUID")
+    untag_parser.add_argument("tag", help="Tag to remove")
+
+
+def setup_checkpoint_commands(subparsers):
+    """Set up checkpoint management commands."""
+    ckpt_parser = subparsers.add_parser("checkpoint", help="Checkpoint management")
+    ckpt_subparsers = ckpt_parser.add_subparsers(dest="checkpoint_command")
+    
+    # List checkpoints
+    list_parser = ckpt_subparsers.add_parser("list", help="List checkpoints for experiment")
+    list_parser.add_argument("experiment_uuid", help="Experiment UUID")
+    
+    # Show checkpoint
+    show_parser = ckpt_subparsers.add_parser("show", help="Show checkpoint details")
+    show_parser.add_argument("experiment_uuid", help="Experiment UUID")
+    show_parser.add_argument("checkpoint_uuid", help="Checkpoint UUID")
+    
+    # Set best checkpoint
+    best_parser = ckpt_subparsers.add_parser("set-best", help="Mark checkpoint as best")
+    best_parser.add_argument("experiment_uuid", help="Experiment UUID")
+    best_parser.add_argument("checkpoint_uuid", help="Checkpoint UUID")
+
+
+def setup_tensorboard_command(subparsers):
+    """Set up tensorboard launcher."""
+    tb_parser = subparsers.add_parser("tensorboard", help="Launch TensorBoard for experiment")
+    tb_parser.add_argument("experiment_uuid", help="Experiment UUID")
+    tb_parser.add_argument("--port", type=int, default=6006, help="TensorBoard port")
+
+
+def setup_migrate_commands(subparsers):
+    """Set up migration commands."""
+    migrate_parser = subparsers.add_parser("migrate", help="Migrate old data to new format")
+    migrate_parser.add_argument("path", help="Path to old library/data directory")
+    migrate_parser.add_argument("--dry-run", action="store_true", help="Validate without migrating")
+    migrate_parser.add_argument("--tags", help="Comma-separated tags to add")
+    migrate_parser.add_argument("--name", help="Library name (defaults to directory name)")
+
+
+def handle_library_commands(args):
+    """Handle library management commands."""
+    lib_mgr = LibraryManager()
+    
+    if args.library_command == "list":
+        libraries = lib_mgr.list_libraries(tags=args.tags)
+        if not libraries:
+            print("No libraries found")
+            return
+        
+        print(f"Found {len(libraries)} library/libraries:")
+        print()
+        for lib in libraries:
+            tags_str = f" [{', '.join(lib.tags)}]" if lib.tags else ""
+            print(f"  {lib.uuid}{tags_str}")
+            print(f"    Name: {lib.name}")
+            print(f"    Type: {lib.structure_type}")
+            print(f"    Structures: {lib.n_structures}")
+            print(f"    Created: {lib.created}")
+            print()
+    
+    elif args.library_command == "show":
+        library = lib_mgr.get_library(args.uuid)
+        if not library:
+            print(f"Library {args.uuid} not found")
+            sys.exit(1)
+        
+        print(f"Library: {library.uuid}")
+        print(f"  Name: {library.name}")
+        print(f"  Tags: {', '.join(library.tags)}")
+        print(f"  Type: {library.structure_type}")
+        print(f"  Structures: {library.n_structures}")
+        print(f"  Created: {library.created}")
+        print(f"  Path: {library.path}")
+        
+        if library.derived_from:
+            print(f"  Derived from: {library.derived_from}")
+        
+        if args.show_structures and library.structures:
+            print("\n  Structures:")
+            for key, value in library.structures.items():
+                print(f"    {key}: {value}")
+        
+        if args.show_voxels and library.voxels:
+            print("\n  Voxels:")
+            for key, value in library.voxels.items():
+                print(f"    {key}: {value}")
+    
+    elif args.library_command == "search":
+        search = LibrarySearch()
+        tags = args.tags or []
+        libraries = search.query(
+            structure_type=args.structure_type,
+            tags=tags,
+        )
+        
+        if not libraries:
+            print("No libraries found matching criteria")
+            return
+        
+        print(f"Found {len(libraries)} matching library/libraries:")
+        for lib in libraries:
+            print(f"  {lib.uuid} - {lib.name} ({lib.n_structures} structures)")
+    
+    elif args.library_command == "tag":
+        lib_mgr.add_tag(args.uuid, args.tag)
+        print(f"Added tag '{args.tag}' to library {args.uuid}")
+    
+    elif args.library_command == "untag":
+        lib_mgr.remove_tag(args.uuid, args.tag)
+        print(f"Removed tag '{args.tag}' from library {args.uuid}")
+
+
+def handle_experiment_commands(args):
+    """Handle experiment management commands."""
+    exp_mgr = ExperimentManager()
+    
+    if args.experiment_command == "list":
+        experiments = exp_mgr.list_experiments(
+            model_type=args.model_type,
+            tags=args.tags,
+            status=args.status,
+        )
+        
+        if not experiments:
+            print("No experiments found")
+            return
+        
+        print(f"Found {len(experiments)} experiment(s):")
+        print()
+        for exp in experiments:
+            tags_str = f" [{', '.join(exp.tags)}]" if exp.tags else ""
+            print(f"  {exp.uuid}{tags_str}")
+            print(f"    Name: {exp.name}")
+            print(f"    Type: {exp.model_type}")
+            print(f"    Status: {exp.status}")
+            print(f"    Library: {exp.library_uuid}")
+            print(f"    Checkpoints: {len(exp.checkpoints)}")
+            print(f"    Created: {exp.created}")
+            print()
+    
+    elif args.experiment_command == "show":
+        experiment = exp_mgr.get_experiment(args.uuid)
+        if not experiment:
+            print(f"Experiment {args.uuid} not found")
+            sys.exit(1)
+        
+        print(f"Experiment: {experiment.uuid}")
+        print(f"  Name: {experiment.name}")
+        print(f"  Tags: {', '.join(experiment.tags)}")
+        print(f"  Model type: {experiment.model_type}")
+        print(f"  Status: {experiment.status}")
+        print(f"  Library: {experiment.library_uuid}")
+        print(f"  Created: {experiment.created}")
+        print(f"  Path: {experiment.path}")
+        print(f"  Checkpoints: {len(experiment.checkpoints)}")
+        
+        if experiment.best_checkpoint:
+            print(f"  Best checkpoint: {experiment.best_checkpoint}")
+        
+        if experiment.dependencies:
+            print("\n  Dependencies:")
+            for key, value in experiment.dependencies.items():
+                print(f"    {key}: {value}")
+    
+    elif args.experiment_command == "tag":
+        experiment = exp_mgr.get_experiment(args.uuid)
+        if not experiment:
+            print(f"Experiment {args.uuid} not found")
+            sys.exit(1)
+        experiment.add_tag(args.tag)
+        print(f"Added tag '{args.tag}' to experiment {args.uuid}")
+    
+    elif args.experiment_command == "untag":
+        experiment = exp_mgr.get_experiment(args.uuid)
+        if not experiment:
+            print(f"Experiment {args.uuid} not found")
+            sys.exit(1)
+        experiment.remove_tag(args.tag)
+        print(f"Removed tag '{args.tag}' from experiment {args.uuid}")
+
+
+def handle_checkpoint_commands(args):
+    """Handle checkpoint management commands."""
+    exp_mgr = ExperimentManager()
+    ckpt_mgr = CheckpointManager()
+    
+    experiment = exp_mgr.get_experiment(args.experiment_uuid)
+    if not experiment:
+        print(f"Experiment {args.experiment_uuid} not found")
+        sys.exit(1)
+    
+    if args.checkpoint_command == "list":
+        checkpoints = ckpt_mgr.list_checkpoints(experiment.path)
+        
+        if not checkpoints:
+            print("No checkpoints found")
+            return
+        
+        print(f"Checkpoints for experiment {experiment.name}:")
+        print()
+        for ckpt in checkpoints:
+            best_mark = " [BEST]" if ckpt.uuid == experiment.best_checkpoint else ""
+            print(f"  {ckpt.uuid}{best_mark}")
+            print(f"    Epoch: {ckpt.epoch}, Step: {ckpt.step}")
+            print(f"    Timestamp: {ckpt.timestamp}")
+            if ckpt.metrics:
+                print(f"    Metrics: {ckpt.metrics}")
+            print()
+    
+    elif args.checkpoint_command == "show":
+        checkpoint = ckpt_mgr.get_checkpoint(experiment.path, args.checkpoint_uuid)
+        if not checkpoint:
+            print(f"Checkpoint {args.checkpoint_uuid} not found")
+            sys.exit(1)
+        
+        print(f"Checkpoint: {checkpoint.uuid}")
+        print(f"  Experiment: {checkpoint.experiment_uuid}")
+        print(f"  Epoch: {checkpoint.epoch}")
+        print(f"  Step: {checkpoint.step}")
+        print(f"  Timestamp: {checkpoint.timestamp}")
+        print(f"  File: {checkpoint.checkpoint_path}")
+        
+        if checkpoint.metrics:
+            print("\n  Metrics:")
+            for key, value in checkpoint.metrics.items():
+                print(f"    {key}: {value}")
+    
+    elif args.checkpoint_command == "set-best":
+        experiment.set_best_checkpoint(args.checkpoint_uuid)
+        print(f"Marked {args.checkpoint_uuid} as best checkpoint")
+
+
+def handle_tensorboard_command(args):
+    """Handle tensorboard launcher."""
+    import subprocess
+    
+    exp_mgr = ExperimentManager()
+    experiment = exp_mgr.get_experiment(args.experiment_uuid)
+    
+    if not experiment:
+        print(f"Experiment {args.experiment_uuid} not found")
+        sys.exit(1)
+    
+    log_dir = experiment.path / "logs" / "tensorboard"
+    
+    if not log_dir.exists():
+        print(f"No tensorboard logs found for experiment {experiment.name}")
+        sys.exit(1)
+    
+    print(f"Starting TensorBoard for experiment {experiment.name}")
+    print(f"Log directory: {log_dir}")
+    print(f"Port: {args.port}")
+    print()
+    print(f"Open http://localhost:{args.port} in your browser")
+    print()
+    
+    try:
+        subprocess.run([
+            "tensorboard",
+            "--logdir", str(log_dir),
+            "--port", str(args.port),
+        ])
+    except KeyboardInterrupt:
+        print("\nTensorBoard stopped")
+
+
+def handle_migrate_command(args):
+    """Handle migration command."""
+    path = Path(args.path)
+    
+    # Parse tags
+    tags = args.tags.split(",") if args.tags else None
+    
+    # Check if this is the lnp_5k_10ch directory
+    if path.name == "lnp_5k_10ch" or (path / "lnp_5k_10ch").exists():
+        if path.name != "lnp_5k_10ch":
+            path = path / "lnp_5k_10ch"
+        
+        print("Detected lnp_5k_10ch - using specialized migration")
+        migrate_lnp_5k_10ch(
+            output_dir=path.parent,
+            tags=tags,
+            dry_run=args.dry_run,
+        )
+    else:
+        # Generic library migration
+        migrate_library(
+            old_path=path,
+            name=args.name,
+            tags=tags,
+            dry_run=args.dry_run,
+        )
+
+
+def main():
+    """Main CLI entry point."""
+    parser = argparse.ArgumentParser(
+        prog="frame",
+        description="FRAME: Framework for Refining Analysis through Materials digital twins"
+    )
+    
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+    
+    # Core commands
+    setup_library_commands(subparsers)
+    setup_experiment_commands(subparsers)
+    setup_checkpoint_commands(subparsers)
+    setup_tensorboard_command(subparsers)
+    setup_migrate_commands(subparsers)
+    
+    # Try to import and register sub-package CLIs
+    try:
+        from frame_geo import cli as geo_cli
+        if hasattr(geo_cli, "register_subcommands"):
+            geo_cli.register_subcommands(subparsers)
+        else:
+            # Fallback: create geo subcommand that calls frame-geo CLI
+            geo_parser = subparsers.add_parser("geo", help="Geometry generation (frame-geo)")
+            geo_parser.add_argument("geo_args", nargs=argparse.REMAINDER, help="Arguments for frame-geo")
+    except ImportError:
+        pass
+    
+    try:
+        from frame_twin import cli as twin_cli
+        if hasattr(twin_cli, "register_subcommands"):
+            twin_cli.register_subcommands(subparsers)
+        else:
+            # Fallback: create twin subcommand
+            twin_parser = subparsers.add_parser("twin", help="Digital twin (frame-twin)")
+            twin_parser.add_argument("twin_args", nargs=argparse.REMAINDER, help="Arguments for frame-twin")
+    except ImportError:
+        pass
+    
+    args = parser.parse_args()
+    
+    if not args.command:
+        parser.print_help()
+        sys.exit(1)
+    
+    # Dispatch commands
+    if args.command == "library":
+        handle_library_commands(args)
+    elif args.command == "experiment":
+        handle_experiment_commands(args)
+    elif args.command == "checkpoint":
+        handle_checkpoint_commands(args)
+    elif args.command == "tensorboard":
+        handle_tensorboard_command(args)
+    elif args.command == "migrate":
+        handle_migrate_command(args)
+    elif args.command == "geo" and hasattr(args, "geo_args"):
+        # Fallback handling for geo
+        import subprocess
+        subprocess.run(["frame-geo"] + args.geo_args)
+    elif args.command == "twin" and hasattr(args, "twin_args"):
+        # Fallback handling for twin
+        import subprocess
+        subprocess.run(["frame-twin"] + args.twin_args)
+    else:
+        print(f"Unknown command: {args.command}")
+        parser.print_help()
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

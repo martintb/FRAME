@@ -19,8 +19,15 @@ from .voxelization.hybrid import HybridVoxelizer
 from .storage import ParametricStorage
 from .statistics import compute_statistics
 from .visualization import LNPVisualizer
-from frame_voxel.voxel_grid import VoxelGrid
-from frame_voxel.storage import VoxelLibraryWriter
+from frame.voxel_grid import VoxelGrid
+from frame.storage import VoxelLibraryWriter
+
+# Optional: Use LibraryManager if available for UUID tracking
+try:
+    from frame.management import LibraryManager
+    HAS_LIBRARY_MANAGER = True
+except ImportError:
+    HAS_LIBRARY_MANAGER = False
 
 
 def _process_structure_batch(params_batch, config_dict, structure_type, validation_config, voxelization_config, save_voxelized, save_parametric):
@@ -229,6 +236,10 @@ class StructureGenerator:
 
         # Save metadata
         self._save_metadata()
+        
+        # Register library with LibraryManager if available
+        if HAS_LIBRARY_MANAGER:
+            self._register_library()
 
         # Print summary
         self._print_summary()
@@ -476,6 +487,78 @@ class StructureGenerator:
         }
         with open(output_path / "config.json", "w") as f:
             json.dump(config_dict, f, indent=2)
+    
+    def _register_library(self) -> None:
+        """Register generated library with LibraryManager for UUID tracking."""
+        if not HAS_LIBRARY_MANAGER:
+            return
+        
+        output_path = Path(self.config.output.base_path)
+        
+        # Check if voxels.zarr exists
+        voxels_path = output_path / "voxels.zarr"
+        if not voxels_path.exists():
+            print("Skipping library registration (no voxels.zarr found)")
+            return
+        
+        print("Registering library with LibraryManager...")
+        try:
+            lib_mgr = LibraryManager()
+            
+            # Read voxel manifest for metadata
+            manifest_path = voxels_path / "manifest.json"
+            if manifest_path.exists():
+                with open(manifest_path, "r") as f:
+                    voxel_manifest = json.load(f)
+            else:
+                voxel_manifest = {}
+            
+            # Read channel info
+            channel_info_path = voxels_path / "channel_info.json"
+            if channel_info_path.exists():
+                with open(channel_info_path, "r") as f:
+                    channel_info = json.load(f)
+            else:
+                channel_info = {}
+            
+            # Determine library name
+            lib_name = output_path.name
+            
+            # Create library entry
+            library = lib_mgr.create_library(
+                name=lib_name,
+                structure_type=self.config.structure_type,
+                n_structures=self.validation_stats.get("total_accepted", 0),
+                tags=["generated", self.config.structure_type],
+                structures_info={
+                    "path": "structures.zarr",
+                    "format": "zarr",
+                    "contains": ["shells", "payloads", "blebs", "parameters"]
+                } if (output_path / "structures.zarr").exists() else {},
+                voxels_info={
+                    "path": "voxels.zarr",
+                    "format": "zarr",
+                    "voxel_shape": voxel_manifest.get("voxel_shape", [128, 128, 128]),
+                    "voxel_size_nm": voxel_manifest.get("voxel_size_nm", 1.0),
+                    "n_channels": voxel_manifest.get("n_channels", 0),
+                    "channel_info": channel_info,
+                    "statistics": voxel_manifest.get("statistics", {}),
+                },
+            )
+            
+            # Copy data to library
+            lib_mgr.copy_data_to_library(
+                library.uuid,
+                structures_path=output_path / "structures.zarr" if (output_path / "structures.zarr").exists() else None,
+                voxels_path=voxels_path,
+            )
+            
+            print(f"✓ Library registered with UUID: {library.uuid}")
+            print(f"  Location: {library.path}")
+            
+        except Exception as e:
+            print(f"Warning: Failed to register library: {e}")
+            print("Library files are still available at the output path.")
 
 
     def _generate_visualizations(self, structures) -> None:
