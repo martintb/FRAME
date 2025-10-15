@@ -500,8 +500,8 @@ def voxelize_command(args):
         import numpy as np
         import torch
         from tqdm import tqdm
-        from frame_voxel.storage import VoxelLibraryWriter
-        from frame_voxel.voxel_grid import VoxelGrid
+        from frame.storage import VoxelLibraryWriter
+        from frame.voxel_grid import VoxelGrid
         
         structures_path = Path(args.structures_path)
         output_path = Path(args.output_path)

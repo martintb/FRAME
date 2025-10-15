@@ -8,8 +8,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent / "packages" / "frame-voxel" / "src"))
 sys.path.insert(0, str(Path(__file__).parent / "packages" / "frame-geo" / "src"))
 
-from frame_voxel.storage import VoxelLibrary
-from frame_voxel.visualize_napari import NapariSlicer
+from frame.storage import VoxelLibrary
+from frame.visualize_napari import NapariViewer
 
 def demo_argmax_visualization():
     """Demonstrate the argmax channel visualization."""

@@ -384,21 +384,85 @@ def handle_migrate_command(args):
         )
 
 
+def setup_view_command(subparsers):
+    """Set up view command for interactive visualization."""
+    view_parser = subparsers.add_parser("view", help="Interactive visualization of voxel structures")
+    view_parser.add_argument("library_uuid", help="Library UUID")
+    view_parser.add_argument("--index", type=int, default=None, help="Structure index (default: random)")
+    view_parser.add_argument("--opacity", type=float, default=0.25, help="Default opacity (default: 0.25)")
+    view_parser.add_argument("--sigmoid", action="store_true", help="Apply sigmoid activation")
+
+
+def handle_view_command(args):
+    """Handle view command."""
+    import numpy as np
+    import napari
+
+    from .storage import VoxelLibrary
+    from .visualize_napari import NapariViewer
+    from .management import LibraryManager
+
+    # Resolve library UUID to path
+    lib_mgr = LibraryManager()
+    library = lib_mgr.get_library(args.library_uuid)
+
+    if not library:
+        print(f"Library {args.library_uuid} not found")
+        sys.exit(1)
+
+    # Load library
+    voxel_library = VoxelLibrary(library.path / "voxels.zarr")
+
+    print(f"Found {len(voxel_library)} voxelized structures")
+
+    # Select structure index
+    if args.index is not None:
+        if args.index < 0 or args.index >= len(voxel_library):
+            print(f"Error: Index {args.index} out of range [0, {len(voxel_library)-1}]")
+            sys.exit(1)
+        idx = args.index
+    else:
+        idx = np.random.randint(0, len(voxel_library))
+
+    print(f"Loading structure {idx}")
+    voxel_grid = voxel_library[idx]
+
+    print(f"Structure shape: {voxel_grid.shape}")
+    print(f"Channels: {list(voxel_grid.channels.keys())}")
+    print(f"Voxel size: {voxel_grid.voxel_size} nm")
+
+    if args.sigmoid:
+        import torch
+        voxel_grid.data = torch.sigmoid(voxel_grid.data)
+
+    print("Opening napari in 3D viewer mode...")
+    NapariViewer.view_structure(voxel_grid, opacity=args.opacity)
+
+    print("\n✓ Napari viewer opened!")
+    print("\nTips:")
+    print("  • Use layer controls (left panel) to toggle channels")
+    print("  • Adjust opacity and contrast in layer controls")
+    print("\nClose the napari window to exit.")
+
+    napari.run()
+
+
 def main():
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
         prog="frame",
         description="FRAME: Framework for Refining Analysis through Materials digital twins"
     )
-    
+
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
-    
+
     # Core commands
     setup_library_commands(subparsers)
     setup_experiment_commands(subparsers)
     setup_checkpoint_commands(subparsers)
     setup_tensorboard_command(subparsers)
     setup_migrate_commands(subparsers)
+    setup_view_command(subparsers)
     
     # Try to import and register sub-package CLIs
     try:
@@ -440,6 +504,8 @@ def main():
         handle_tensorboard_command(args)
     elif args.command == "migrate":
         handle_migrate_command(args)
+    elif args.command == "view":
+        handle_view_command(args)
     elif args.command == "geo" and hasattr(args, "geo_args"):
         # Fallback handling for geo
         import subprocess
