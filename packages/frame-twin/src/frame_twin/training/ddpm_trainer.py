@@ -5,6 +5,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from typing import Dict, Any, Optional
 import numpy as np
+from pathlib import Path
 
 from .base_trainer import BaseTrainer
 from ..losses import DDPMLoss
@@ -13,16 +14,20 @@ from ..models import VAE, UNetVAE, DDPM
 from ..models.conditioning import (
     ConcatenationConditioning,
     CrossAttentionConditioning,
-    AdaptiveNormalizationConditioning
+    AdaptiveNormalizationConditioning,
+    FiLMConditioning
 )
 
 
 class DDPMTrainer(BaseTrainer):
     """Trainer for DDPM models."""
     
-    def __init__(self, config: DDPMConfig):
+    def __init__(self, config: DDPMConfig, experiment=None):
+        # Resolve VAE checkpoint path (supports experiment UUID or direct path)
+        vae_checkpoint_path = self._resolve_checkpoint_path(config.model.vae_experiment_uuid)
+        
         # Load VAE (supports both VAE and UNetVAE)
-        vae_checkpoint = torch.load(config.model.vae_checkpoint, map_location='cpu')
+        vae_checkpoint = torch.load(vae_checkpoint_path, map_location='cpu')
         vae_config = vae_checkpoint['config']['model']
         
         # Detect model type and instantiate accordingly
@@ -94,12 +99,28 @@ class DDPMTrainer(BaseTrainer):
         train_loader = None
         val_loader = None
         
-        # Create checkpoint manager
+        # Create checkpoint manager with experiment-specific path
         from ..checkpointing import CheckpointManager
-        checkpoint_manager = CheckpointManager(config.checkpointing)
+        if experiment is not None:
+            checkpoint_manager = CheckpointManager(
+                config.checkpointing,
+                output_dir=str(experiment.path / "checkpoints")
+            )
+        else:
+            checkpoint_manager = CheckpointManager(config.checkpointing)
         
         # Setup device
         device = torch.device(config.training.device)
+        
+        # Update logging config with experiment-specific TensorBoard path
+        import copy
+        logging_config = copy.copy(config.logging)
+        if experiment is not None:
+            # Set TensorBoard directory to experiment's logs
+            logging_config.tensorboard_dir = str(experiment.path / "logs" / "tensorboard")
+        elif config.logging.tensorboard_dir is None:
+            # Fallback to experiments_dir if no experiment provided
+            logging_config.tensorboard_dir = str(Path(config.checkpointing.experiments_dir) / "logs" / "tensorboard")
         
         # Initialize base trainer
         super().__init__(
@@ -110,12 +131,13 @@ class DDPMTrainer(BaseTrainer):
             scheduler=scheduler,
             loss_fn=loss_fn,
             training_config=config.training,
-            logging_config=config.logging,
+            logging_config=logging_config,
             checkpoint_manager=checkpoint_manager,
             device=device
         )
         
         self.config = config
+        self.experiment = experiment
         self.vae = vae.to(device)
         self.conditioning_strategy = conditioning_strategy
         
@@ -145,6 +167,12 @@ class DDPMTrainer(BaseTrainer):
                 conditioning_dim=conditioning_config.param_embedding_dim,
                 parameter_names=self._get_parameter_names(),
                 use_adaptive_group_norm=conditioning_config.use_adaptive_group_norm
+            )
+        elif config.model.conditioning_strategy == "film":
+            return FiLMConditioning(
+                param_embedding_dim=conditioning_config.param_embedding_dim,
+                hidden_dim=conditioning_config.film_hidden_dim or 256,
+                parameter_names=self._get_parameter_names()
             )
         else:
             raise ValueError(f"Unknown conditioning strategy: {config.model.conditioning_strategy}")
@@ -193,8 +221,16 @@ class DDPMTrainer(BaseTrainer):
         # Encode parameters to conditioning
         conditioning = self._encode_parameters_batch(parameters)
         
-        # Forward pass through DDPM
-        predicted_noise, noise = self.model(latents, timesteps, conditioning)
+        # Get conditioning dropout probability for CFG training
+        conditioning_dropout = getattr(self.config.model, 'conditioning_dropout', 0.0)
+        
+        # Forward pass through DDPM with conditioning dropout
+        predicted_noise, noise = self.model(
+            latents, 
+            timesteps, 
+            conditioning,
+            conditioning_dropout=conditioning_dropout
+        )
         
         # Compute loss
         loss = self.loss_fn(predicted_noise, noise, timesteps)
@@ -229,9 +265,19 @@ class DDPMTrainer(BaseTrainer):
     def generate_samples(
         self,
         num_samples: int,
-        conditioning: Optional[Dict[str, Any]] = None
+        conditioning: Optional[Dict[str, Any]] = None,
+        cfg_scale: float = 1.0
     ) -> torch.Tensor:
-        """Generate samples from the trained DDPM."""
+        """Generate samples from the trained DDPM with optional CFG.
+        
+        Args:
+            num_samples: Number of samples to generate
+            conditioning: Optional parameter conditioning
+            cfg_scale: Classifier-free guidance scale (1.0 = no guidance, >1.0 = stronger)
+            
+        Returns:
+            Generated voxel grids
+        """
         self.model.eval()
         
         with torch.no_grad():
@@ -245,9 +291,13 @@ class DDPMTrainer(BaseTrainer):
             else:
                 conditioning_tensor = None
             
-            # Sample from DDPM
+            # Sample from DDPM with CFG
             latent_shape = (num_samples, self.model.latent_channels, 16, 16, 16)
-            latents = self.model.p_sample_loop(latent_shape, conditioning_tensor)
+            latents = self.model.p_sample_loop(
+                latent_shape, 
+                conditioning_tensor,
+                cfg_scale=cfg_scale
+            )
             
             # Decode to voxel space
             voxels = self.vae.decode(latents)
@@ -256,29 +306,10 @@ class DDPMTrainer(BaseTrainer):
     
     def validate_epoch(self) -> Dict[str, float]:
         """Validate for one epoch with sample generation."""
-        self.model.eval()
+        # Call base class validation (handles step-based logging)
+        epoch_metrics = super().validate_epoch()
         
-        epoch_metrics = {
-            'val_loss': 0.0,
-            'num_batches': 0
-        }
-        
-        with torch.no_grad():
-            for batch in self.val_loader:
-                # Move batch to device
-                batch = self._move_batch_to_device(batch)
-                
-                # Compute loss
-                loss, metrics = self._compute_loss(batch)
-                
-                # Update metrics
-                epoch_metrics['val_loss'] += loss.item()
-                epoch_metrics['num_batches'] += 1
-        
-        # Average metrics
-        epoch_metrics['val_loss'] /= epoch_metrics['num_batches']
-        
-        # Generate validation samples
+        # Add DDPM-specific validation metrics
         if epoch_metrics['num_batches'] > 0:
             try:
                 val_samples = self.generate_samples(4)  # Generate 4 samples
@@ -294,7 +325,7 @@ class DDPMTrainer(BaseTrainer):
         return {
             'type': 'ddpm',
             'conditioning_strategy': self.config.model.conditioning_strategy,
-            'vae_checkpoint': self.config.model.vae_checkpoint,
+            'vae_experiment_uuid': self.config.model.vae_experiment_uuid,
             'freeze_vae': self.config.model.freeze_vae,
             'latent_channels': self.config.model.latent_channels,
             'timesteps': self.config.model.timesteps,
@@ -333,9 +364,15 @@ class DDPMTrainer(BaseTrainer):
             real_voxel = voxels[0:1]  # Take first sample, keep batch dim
             real_latent = self.vae.encode(real_voxel)
             
-            # 2. Generate sample from DDPM in latent space
+            # 2. Generate sample from DDPM in latent space with CFG
             latent_shape = (n_samples, self.model.latent_channels, 16, 16, 16)
-            generated_latent = self.model.p_sample_loop(latent_shape, conditioning_tensor)
+            cfg_scale = getattr(self.config.model, 'cfg_scale', 1.0)
+            generated_latent = self.model.p_sample_loop(
+                latent_shape, 
+                conditioning_tensor,
+                cfg_scale=cfg_scale,
+                show_progress=False
+            )
             
             # 3. Decode both to voxel space
             reconstructed_voxel = self.vae.decode(real_latent, skips=None)
@@ -407,4 +444,86 @@ class DDPMTrainer(BaseTrainer):
             diff_real_gen_norm[None, ...], 
             step, 
             dataformats='CHW'
+        )
+    
+    @staticmethod
+    def _resolve_checkpoint_path(checkpoint_ref: str) -> Path:
+        """Resolve checkpoint reference to actual path.
+        
+        Supports:
+        - Experiment UUID (e.g., 'exp_537908480581') -> resolves to best checkpoint
+        - Checkpoint UUID (e.g., 'ckpt_abc123') -> resolves to checkpoint path
+        - Direct file path -> returned as-is
+        
+        Args:
+            checkpoint_ref: Experiment UUID, checkpoint UUID, or direct path
+            
+        Returns:
+            Path to checkpoint file
+            
+        Raises:
+            FileNotFoundError: If checkpoint cannot be resolved
+        """
+        from frame.management import ExperimentManager, CheckpointManager
+        from frame.config import get_config
+        
+        # If it's already a valid path, return it
+        checkpoint_path = Path(checkpoint_ref)
+        if checkpoint_path.exists():
+            return checkpoint_path
+        
+        # Try to resolve as experiment UUID
+        if checkpoint_ref.startswith('exp_'):
+            config = get_config()
+            exp_mgr = ExperimentManager()
+            experiment = exp_mgr.get_experiment(checkpoint_ref)
+            
+            if experiment is None:
+                raise FileNotFoundError(
+                    f"Experiment '{checkpoint_ref}' not found in {config.experiments_path}"
+                )
+            
+            if experiment.best_checkpoint is None:
+                raise ValueError(
+                    f"Experiment '{checkpoint_ref}' has no best checkpoint set. "
+                    f"Use 'frame checkpoint set-best' to mark one."
+                )
+            
+            # Get the best checkpoint
+            ckpt_mgr = CheckpointManager()
+            checkpoint = ckpt_mgr.get_checkpoint(
+                experiment.path,
+                experiment.best_checkpoint
+            )
+            
+            if checkpoint is None:
+                raise FileNotFoundError(
+                    f"Best checkpoint '{experiment.best_checkpoint}' not found for experiment '{checkpoint_ref}'"
+                )
+            
+            return checkpoint.checkpoint_path
+        
+        # Try to resolve as checkpoint UUID
+        elif checkpoint_ref.startswith('ckpt_'):
+            exp_mgr = ExperimentManager()
+            ckpt_mgr = CheckpointManager()
+            
+            # Search for the checkpoint across all experiments
+            for experiment in exp_mgr.list_experiments():
+                if checkpoint_ref in experiment.checkpoints:
+                    checkpoint = ckpt_mgr.get_checkpoint(
+                        experiment.path,
+                        checkpoint_ref
+                    )
+                    if checkpoint:
+                        return checkpoint.checkpoint_path
+            
+            raise FileNotFoundError(
+                f"Checkpoint '{checkpoint_ref}' not found in any experiment"
+            )
+        
+        # If we get here, it's neither a valid path nor a recognized UUID
+        raise FileNotFoundError(
+            f"Cannot resolve checkpoint reference '{checkpoint_ref}'. "
+            f"Expected: experiment UUID (exp_*), checkpoint UUID (ckpt_*), or valid file path."
         )

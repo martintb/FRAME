@@ -16,6 +16,50 @@ from .data import create_data_splits, create_data_loaders
 from frame.storage import VoxelLibrary
 
 
+def _resolve_library_path(library_ref: str) -> tuple[Path, str]:
+    """Resolve library reference to actual path and UUID.
+    
+    Supports:
+    - Library UUID (e.g., 'lib_454c2a20e77b') -> resolves to library path
+    - Direct file path -> returned as-is
+    
+    Args:
+        library_ref: Library UUID or direct path
+        
+    Returns:
+        Tuple of (path to library directory, library UUID)
+        
+    Raises:
+        FileNotFoundError: If library cannot be resolved
+    """
+    from frame.management import LibraryManager
+    from frame.config import get_config
+    
+    # If it's already a valid path, return it with empty UUID
+    library_path = Path(library_ref)
+    if library_path.exists():
+        return library_path, ""
+    
+    # Try to resolve as library UUID
+    if library_ref.startswith('lib_'):
+        config = get_config()
+        lib_mgr = LibraryManager()
+        library = lib_mgr.get_library(library_ref)
+        
+        if library is None:
+            raise FileNotFoundError(
+                f"Library '{library_ref}' not found in {config.libraries_path}"
+            )
+        
+        return library.path / "voxels.zarr", library_ref
+    
+    # If we get here, it's neither a valid path nor a recognized UUID
+    raise FileNotFoundError(
+        f"Cannot resolve library reference '{library_ref}'. "
+        f"Expected: library UUID (lib_*) or valid file path."
+    )
+
+
 def register_subcommands(subparsers):
     """Register frame-twin subcommands with the main frame CLI.
     
@@ -26,15 +70,14 @@ def register_subcommands(subparsers):
     twin_parser = subparsers.add_parser("twin", help="Digital twin (frame-twin)")
     twin_subparsers = twin_parser.add_subparsers(dest="twin_command", help="Twin commands")
     
-    # Train VAE command
-    train_vae_parser = twin_subparsers.add_parser('train-vae', help='Train VAE model')
-    train_vae_parser.add_argument('config', help='Path to VAE training config TOML file')
-    train_vae_parser.add_argument('--resume', help='Path to checkpoint to resume from')
+    # Unified train command
+    train_parser = twin_subparsers.add_parser('train', help='Train model (auto-detects VAE/DDPM from config)')
+    train_parser.add_argument('config', help='Path to training config TOML file')
     
-    # Train DDPM command
-    train_ddpm_parser = twin_subparsers.add_parser('train-ddpm', help='Train DDPM model')
-    train_ddpm_parser.add_argument('config', help='Path to DDPM training config TOML file')
-    train_ddpm_parser.add_argument('--resume', help='Path to checkpoint to resume from')
+    # Generate config command
+    generate_config_parser = twin_subparsers.add_parser('generate-config', help='Generate template config file')
+    generate_config_parser.add_argument('model_type', choices=['vae', 'unet_vae', 'ddpm'], help='Model type for config template')
+    generate_config_parser.add_argument('output', help='Output path for config file')
     
     # Generate command
     generate_parser = twin_subparsers.add_parser('generate', help='Generate structures')
@@ -51,17 +94,14 @@ def main():
     parser = argparse.ArgumentParser(description="frame-twin: Diffusion-based digital twin")
     subparsers = parser.add_subparsers(dest='command', help='Available commands')
     
-    # Train VAE command
-    train_vae_parser = subparsers.add_parser('train-vae', help='Train VAE model')
-    train_vae_parser.add_argument('config', help='Path to VAE training config TOML file')
-    train_vae_parser.add_argument('--resume', help='Path to checkpoint to resume from')
-    train_vae_parser.add_argument('--continue', dest='resume', help='Alias for --resume: Path to checkpoint to resume from')
+    # Unified train command
+    train_parser = subparsers.add_parser('train', help='Train model (auto-detects VAE/DDPM from config)')
+    train_parser.add_argument('config', help='Path to training config TOML file')
     
-    # Train DDPM command
-    train_ddpm_parser = subparsers.add_parser('train-ddpm', help='Train DDPM model')
-    train_ddpm_parser.add_argument('config', help='Path to DDPM training config TOML file')
-    train_ddpm_parser.add_argument('--resume', help='Path to checkpoint to resume from')
-    train_ddpm_parser.add_argument('--continue', dest='resume', help='Alias for --resume: Path to checkpoint to resume from')
+    # Generate config command
+    generate_config_parser = subparsers.add_parser('generate-config', help='Generate template config file')
+    generate_config_parser.add_argument('model_type', choices=['vae', 'unet_vae', 'ddpm'], help='Model type for config template')
+    generate_config_parser.add_argument('output', help='Output path for config file')
     
     # Generate command
     generate_parser = subparsers.add_parser('generate', help='Generate structures')
@@ -83,10 +123,10 @@ def main():
     
     args = parser.parse_args()
     
-    if args.command == 'train-vae':
-        train_vae(args.config, args.resume)
-    elif args.command == 'train-ddpm':
-        train_ddpm(args.config, args.resume)
+    if args.command == 'train':
+        train(args.config)
+    elif args.command == 'generate-config':
+        generate_config(args.model_type, args.output)
     elif args.command == 'generate':
         generate_structures(args.config)
     elif args.command == 'evaluate':
@@ -108,23 +148,54 @@ def main():
         sys.exit(1)
 
 
-def train_vae(config_path: str, resume_checkpoint: Optional[str] = None):
+def train(config_path: str):
+    """Unified training dispatcher based on model type."""
+    print(f"Loading config from {config_path}")
+    
+    # Read config to determine model type
+    with open(config_path, 'rb') as f:
+        config_data = toml.load(f)
+    
+    model_type = config_data.get('model', {}).get('type')
+    print(f"Detected model type: {model_type}")
+    
+    if model_type in ['vae', 'unet_vae']:
+        train_vae(config_path)
+    elif model_type == 'ddpm':
+        train_ddpm(config_path)
+    else:
+        raise ValueError(f"Unknown model type: {model_type}. Expected 'vae', 'unet_vae', or 'ddpm'")
+
+
+def train_vae(config_path: str):
     """Train VAE model."""
+    from frame.management import ExperimentManager
+    
     print(f"Loading VAE config from {config_path}")
     config = VAEConfig.from_toml(config_path)
     
-    # Save config TOML to output directory
-    output_dir = Path(config.checkpointing.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    config_toml_path = output_dir / "config.toml"
+    # Resolve library path and get UUID
+    library_path, library_uuid = _resolve_library_path(config.data.library_uuid)
+    print(f"Loading voxel library from {library_path}")
+    voxel_library = VoxelLibrary(library_path)
     
-    # Copy the original config file to the output directory
-    import shutil
-    shutil.copy2(config_path, config_toml_path)
-    print(f"Saved config to {config_toml_path}")
+    # Create experiment using ExperimentManager
+    print("Creating experiment...")
+    exp_mgr = ExperimentManager()
+    experiment = exp_mgr.create_experiment(
+        name=config.metadata.name,
+        model_type=config.model.type,
+        library_uuid=library_uuid or config.data.library_uuid,
+        config_path=Path(config_path),
+        tags=[config.model.type, f"{config.model.levels}-level", f"latent-{config.model.latent_channels}"],
+        dependencies={}
+    )
+    print(f"Created experiment: {experiment.uuid}")
+    print(f"Experiment path: {experiment.path}")
     
-    print(f"Loading voxel library from {config.data.voxel_library_path}")
-    voxel_library = VoxelLibrary(config.data.voxel_library_path)
+    # Update config with experiment-specific paths
+    config.checkpointing.experiments_dir = str(experiment.path.parent)
+    config.logging.log_every_steps = config.logging.log_every_steps
     
     print("Creating data splits...")
     data_splits = create_data_splits(
@@ -138,15 +209,13 @@ def train_vae(config_path: str, resume_checkpoint: Optional[str] = None):
     )
     
     print("Creating data loaders...")
-    # Don't pre-load to device - let the trainer handle device transfer in main process
-    # For MPS, set num_workers=0 in config to avoid worker process memory issues
     pin_memory = config.training.device == "cuda"
     
     loaders = create_data_loaders(
         voxel_library=voxel_library,
         data_splits=data_splits,
         batch_size=config.training.batch_size,
-        device=None,  # Don't pre-load to device
+        device=None,
         num_workers=config.training.num_workers,
         pin_memory=pin_memory
     )
@@ -154,43 +223,35 @@ def train_vae(config_path: str, resume_checkpoint: Optional[str] = None):
     val_loader = loaders['val']
     
     print("Initializing VAE trainer...")
-    trainer = VAETrainer(config)
+    trainer = VAETrainer(config, experiment=experiment)
     trainer.set_data_loaders(train_loader, val_loader)
     
-    # Resume from checkpoint if provided
-    start_epoch = 0
-    if resume_checkpoint:
-        print(f"Resuming from checkpoint: {resume_checkpoint}")
-        checkpoint_data = trainer.checkpoint_manager.load_checkpoint(
-            resume_checkpoint, trainer.model, trainer.optimizer, trainer.scheduler
-        )
-        start_epoch = checkpoint_data['epoch'] + 1
-        # Restore global_step to maintain proper training state
-        trainer.global_step = checkpoint_data['global_step']
-        print(f"Resuming from epoch {checkpoint_data['epoch']}, global step {checkpoint_data['global_step']}")
+    # Update experiment status
+    experiment.update_status("running")
     
     print("Starting VAE training...")
-    trainer.train(start_epoch=start_epoch)
-    print("VAE training completed!")
+    try:
+        trainer.train()
+        experiment.update_status("completed")
+        print("VAE training completed!")
+    except Exception as e:
+        experiment.update_status("failed")
+        raise e
 
 
-def train_ddpm(config_path: str, resume_checkpoint: Optional[str] = None):
-    """Train DDPM model."""
-    print(f"Loading DDPM config from {config_path}")
-    config = DDPMConfig.from_toml(config_path)
+def train_vae_with_checkpoint(config_path: str, experiment, checkpoint_path: str):
+    """Train VAE model resuming from a checkpoint."""
+    print(f"Loading VAE config from {config_path}")
+    config = VAEConfig.from_toml(config_path)
     
-    # Save config TOML to output directory
-    output_dir = Path(config.checkpointing.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    config_toml_path = output_dir / "config.toml"
+    # Resolve library path and get UUID
+    library_path, library_uuid = _resolve_library_path(config.data.library_uuid)
+    print(f"Loading voxel library from {library_path}")
+    voxel_library = VoxelLibrary(library_path)
     
-    # Copy the original config file to the output directory
-    import shutil
-    shutil.copy2(config_path, config_toml_path)
-    print(f"Saved config to {config_toml_path}")
-    
-    print(f"Loading voxel library from {config.data.voxel_library_path}")
-    voxel_library = VoxelLibrary(config.data.voxel_library_path)
+    # Update config with experiment-specific paths
+    config.checkpointing.experiments_dir = str(experiment.path.parent)
+    config.logging.log_every_steps = config.logging.log_every_steps
     
     print("Creating data splits...")
     data_splits = create_data_splits(
@@ -204,15 +265,93 @@ def train_ddpm(config_path: str, resume_checkpoint: Optional[str] = None):
     )
     
     print("Creating data loaders...")
-    # Don't pre-load to device - let the trainer handle device transfer in main process
-    # For MPS, set num_workers=0 in config to avoid worker process memory issues
     pin_memory = config.training.device == "cuda"
     
     loaders = create_data_loaders(
         voxel_library=voxel_library,
         data_splits=data_splits,
         batch_size=config.training.batch_size,
-        device=None,  # Don't pre-load to device
+        device=None,
+        num_workers=config.training.num_workers,
+        pin_memory=pin_memory
+    )
+    train_loader = loaders['train']
+    val_loader = loaders['val']
+    
+    print("Initializing VAE trainer...")
+    trainer = VAETrainer(config, experiment=experiment)
+    trainer.set_data_loaders(train_loader, val_loader)
+    
+    # Load checkpoint
+    print(f"Loading checkpoint from {checkpoint_path}")
+    checkpoint_data = trainer.checkpoint_manager.load_checkpoint(
+        checkpoint_path, trainer.model, trainer.optimizer, trainer.scheduler
+    )
+    start_epoch = checkpoint_data['epoch'] + 1
+    trainer.global_step = checkpoint_data['global_step']
+    print(f"Resuming from epoch {checkpoint_data['epoch']}, global step {checkpoint_data['global_step']}")
+    
+    # Update experiment status
+    experiment.update_status("running")
+    
+    print("Starting VAE training...")
+    try:
+        trainer.train(start_epoch=start_epoch)
+        experiment.update_status("completed")
+        print("VAE training completed!")
+    except Exception as e:
+        experiment.update_status("failed")
+        raise e
+
+
+def train_ddpm(config_path: str):
+    """Train DDPM model."""
+    from frame.management import ExperimentManager
+    
+    print(f"Loading DDPM config from {config_path}")
+    config = DDPMConfig.from_toml(config_path)
+    
+    # Resolve library path and get UUID
+    library_path, library_uuid = _resolve_library_path(config.data.library_uuid)
+    print(f"Loading voxel library from {library_path}")
+    voxel_library = VoxelLibrary(library_path)
+    
+    # Create experiment using ExperimentManager
+    print("Creating experiment...")
+    exp_mgr = ExperimentManager()
+    experiment = exp_mgr.create_experiment(
+        name=config.metadata.name,
+        model_type=config.model.type,
+        library_uuid=library_uuid or config.data.library_uuid,
+        config_path=Path(config_path),
+        tags=[config.model.type, config.model.conditioning_strategy],
+        dependencies={"vae_experiment": config.model.vae_experiment_uuid}
+    )
+    print(f"Created experiment: {experiment.uuid}")
+    print(f"Experiment path: {experiment.path}")
+    
+    # Update config with experiment-specific paths
+    config.checkpointing.experiments_dir = str(experiment.path.parent)
+    
+    print("Creating data splits...")
+    data_splits = create_data_splits(
+        voxel_library=voxel_library,
+        split_strategy=config.data.split_strategy,
+        train_ratio=config.data.train_ratio,
+        val_ratio=config.data.val_ratio,
+        test_ratio=config.data.test_ratio,
+        stratify_params=config.data.stratify_params,
+        random_seed=config.metadata.random_seed
+    )
+    
+    print("Creating data loaders...")
+    pin_memory = config.training.device == "cuda"
+    
+    loaders = create_data_loaders(
+        voxel_library=voxel_library,
+        data_splits=data_splits,
+        batch_size=config.training.batch_size,
+        device=None,
         num_workers=config.training.num_workers,
         pin_memory=pin_memory
     )
@@ -221,24 +360,85 @@ def train_ddpm(config_path: str, resume_checkpoint: Optional[str] = None):
     
     print("Initializing DDPM trainer...")
     from .training import DDPMTrainer
-    trainer = DDPMTrainer(config)
+    trainer = DDPMTrainer(config, experiment=experiment)
     trainer.set_data_loaders(train_loader, val_loader)
     
-    # Resume from checkpoint if provided
-    start_epoch = 0
-    if resume_checkpoint:
-        print(f"Resuming from checkpoint: {resume_checkpoint}")
-        checkpoint_data = trainer.checkpoint_manager.load_checkpoint(
-            resume_checkpoint, trainer.model, trainer.optimizer, trainer.scheduler
-        )
-        start_epoch = checkpoint_data['epoch'] + 1
-        # Restore global_step to maintain proper training state
-        trainer.global_step = checkpoint_data['global_step']
-        print(f"Resuming from epoch {checkpoint_data['epoch']}, global step {checkpoint_data['global_step']}")
+    # Update experiment status
+    experiment.update_status("running")
     
     print("Starting DDPM training...")
-    trainer.train(start_epoch=start_epoch)
-    print("DDPM training completed!")
+    try:
+        trainer.train()
+        experiment.update_status("completed")
+        print("DDPM training completed!")
+    except Exception as e:
+        experiment.update_status("failed")
+        raise e
+
+
+def train_ddpm_with_checkpoint(config_path: str, experiment, checkpoint_path: str):
+    """Train DDPM model resuming from a checkpoint."""
+    print(f"Loading DDPM config from {config_path}")
+    config = DDPMConfig.from_toml(config_path)
+    
+    # Resolve library path and get UUID
+    library_path, library_uuid = _resolve_library_path(config.data.library_uuid)
+    print(f"Loading voxel library from {library_path}")
+    voxel_library = VoxelLibrary(library_path)
+    
+    # Update config with experiment-specific paths
+    config.checkpointing.experiments_dir = str(experiment.path.parent)
+    
+    print("Creating data splits...")
+    data_splits = create_data_splits(
+        voxel_library=voxel_library,
+        split_strategy=config.data.split_strategy,
+        train_ratio=config.data.train_ratio,
+        val_ratio=config.data.val_ratio,
+        test_ratio=config.data.test_ratio,
+        stratify_params=config.data.stratify_params,
+        random_seed=config.metadata.random_seed
+    )
+    
+    print("Creating data loaders...")
+    pin_memory = config.training.device == "cuda"
+    
+    loaders = create_data_loaders(
+        voxel_library=voxel_library,
+        data_splits=data_splits,
+        batch_size=config.training.batch_size,
+        device=None,
+        num_workers=config.training.num_workers,
+        pin_memory=pin_memory
+    )
+    train_loader = loaders['train']
+    val_loader = loaders['val']
+    
+    print("Initializing DDPM trainer...")
+    from .training import DDPMTrainer
+    trainer = DDPMTrainer(config, experiment=experiment)
+    trainer.set_data_loaders(train_loader, val_loader)
+    
+    # Load checkpoint
+    print(f"Loading checkpoint from {checkpoint_path}")
+    checkpoint_data = trainer.checkpoint_manager.load_checkpoint(
+        checkpoint_path, trainer.model, trainer.optimizer, trainer.scheduler
+    )
+    start_epoch = checkpoint_data['epoch'] + 1
+    trainer.global_step = checkpoint_data['global_step']
+    print(f"Resuming from epoch {checkpoint_data['epoch']}, global step {checkpoint_data['global_step']}")
+    
+    # Update experiment status
+    experiment.update_status("running")
+    
+    print("Starting DDPM training...")
+    try:
+        trainer.train(start_epoch=start_epoch)
+        experiment.update_status("completed")
+        print("DDPM training completed!")
+    except Exception as e:
+        experiment.update_status("failed")
+        raise e
 
 
 def generate_structures(config_path: str):
@@ -293,6 +493,306 @@ def evaluate_model(config_path: str, checkpoint_path: str):
     """Evaluate a trained model."""
     print("Model evaluation not yet implemented")
     # TODO: Implement model evaluation
+
+
+def continue_training(experiment_uuid: str, config_path: Optional[str] = None):
+    """Continue training from an experiment's latest checkpoint.
+    
+    Args:
+        experiment_uuid: UUID of the experiment to continue
+        config_path: Optional path to updated config file
+    """
+    from frame.management import ExperimentManager, CheckpointManager
+    
+    print(f"Loading experiment {experiment_uuid}...")
+    exp_mgr = ExperimentManager()
+    experiment = exp_mgr.get_experiment(experiment_uuid)
+    
+    if experiment is None:
+        raise ValueError(f"Experiment {experiment_uuid} not found")
+    
+    print(f"Found experiment: {experiment.name} ({experiment.model_type})")
+    print(f"Status: {experiment.status}")
+    print(f"Checkpoints: {len(experiment.checkpoints)}")
+    
+    # Find the latest checkpoint
+    ckpt_mgr = CheckpointManager()
+    checkpoints = ckpt_mgr.list_checkpoints(experiment.path)
+    
+    if not checkpoints:
+        raise ValueError(f"No checkpoints found for experiment {experiment_uuid}")
+    
+    # Use best checkpoint if available, otherwise latest
+    if experiment.best_checkpoint:
+        latest_checkpoint = ckpt_mgr.get_checkpoint(experiment.path, experiment.best_checkpoint)
+        if latest_checkpoint is None:
+            print(f"Warning: Best checkpoint {experiment.best_checkpoint} not found, using latest")
+            latest_checkpoint = checkpoints[-1]
+    else:
+        latest_checkpoint = checkpoints[-1]
+    
+    print(f"Resuming from checkpoint: {latest_checkpoint.uuid}")
+    print(f"  Epoch: {latest_checkpoint.epoch}, Step: {latest_checkpoint.step}")
+    print(f"  Timestamp: {latest_checkpoint.timestamp}")
+    
+    # Determine config to use
+    if config_path:
+        print(f"Using updated config: {config_path}")
+        config_file = Path(config_path)
+        # Copy to experiment directory for tracking
+        continued_config = experiment.add_continuation_config(config_file)
+        print(f"Copied config to: {continued_config}")
+    else:
+        # Use original config
+        original_config = experiment.path / "configs" / "initial_config.toml"
+        if not original_config.exists():
+            raise ValueError(f"Original config not found at {original_config}")
+        config_file = original_config
+        print(f"Using original config: {config_file}")
+    
+    # Load config and determine model type
+    if experiment.model_type in ['vae', 'unet_vae']:
+        config = VAEConfig.from_toml(str(config_file))
+        print("Resuming VAE training...")
+        
+        # Create a new experiment for continuation
+        exp_mgr = ExperimentManager()
+        continued_experiment = exp_mgr.create_experiment(
+            name=f"{experiment.name}_continued",
+            model_type=experiment.model_type,
+            library_uuid=experiment.library_uuid,
+            config_path=config_file,
+            tags=experiment.tags + ["continued"],
+            dependencies={"continued_from": experiment.uuid}
+        )
+        
+        # Load the checkpoint into the trainer and resume
+        train_vae_with_checkpoint(str(config_file), continued_experiment, latest_checkpoint.checkpoint_path)
+        
+    elif experiment.model_type == 'ddpm':
+        config = DDPMConfig.from_toml(str(config_file))
+        print("Resuming DDPM training...")
+        
+        # Create a new experiment for continuation
+        exp_mgr = ExperimentManager()
+        continued_experiment = exp_mgr.create_experiment(
+            name=f"{experiment.name}_continued",
+            model_type=experiment.model_type,
+            library_uuid=experiment.library_uuid,
+            config_path=config_file,
+            tags=experiment.tags + ["continued"],
+            dependencies={"continued_from": experiment.uuid}
+        )
+        
+        # Load the checkpoint into the trainer and resume
+        train_ddpm_with_checkpoint(str(config_file), continued_experiment, latest_checkpoint.checkpoint_path)
+        
+    else:
+        raise ValueError(f"Unknown model type: {experiment.model_type}")
+
+
+def generate_config(model_type: str, output_path: str):
+    """Generate template config file for specified model type."""
+    from pathlib import Path
+    
+    output_path = Path(output_path)
+    
+    if model_type == 'vae':
+        template = """# VAE Training Configuration for frame-twin
+# This config trains a VAE to compress 3D voxel structures
+
+[metadata]
+name = "lnp_vae_training"
+description = "VAE training for LNP voxel structure compression"
+random_seed = 42
+
+[data]
+library_uuid = "REPLACE_WITH_LIBRARY_UUID"  # Use 'frame library list' to find UUID
+split_strategy = "random"  # or "stratified"
+train_ratio = 0.8
+val_ratio = 0.1
+test_ratio = 0.1
+# stratify_params = ["shell1_radius_nm", "shell2_probability"]  # for stratified splitting
+
+[model]
+type = "vae"
+input_channels = 9  # Number of material channels
+latent_channels = 32  # Latent space dimension
+base_channels = 64  # Base number of channels (doubles each level)
+levels = 4  # Number of downsampling levels (128³ → 8³ latent)
+
+[training]
+device = "cuda"  # or "cpu", "mps"
+distributed = false  # Set true for DDP
+num_epochs = 100
+batch_size = 16
+learning_rate = 1e-4
+optimizer = "adam"  # "adam", "adamw", or "sgd"
+scheduler = "cosine"  # "cosine", "step", or "none"
+num_workers = 4
+grad_clip = 1.0  # Gradient clipping value (None to disable)
+kl_warmup_epochs = 10  # Linear KL warmup epochs
+
+[loss]
+reconstruction_weight = 1.0
+kl_weight = 0.001
+reconstruction_type = "mse"  # "mse" | "l1" | "bce_logits"
+mask_threshold = 0.005
+bg_weight = 0.0
+edge_weight = 0.1  # Edge-preserving loss weight
+
+[checkpointing]
+experiments_dir = "/Users/tbm/frame_data/experiments"  # Base directory for experiments
+save_every_epochs = 10
+save_every_minutes = 60  # Time-based checkpointing
+keep_last_n = 3
+save_best = true  # Save best validation loss
+
+[logging]
+log_every_steps = 50
+n_recon_compare = 100  # Log reconstruction comparison every N steps
+"""
+    
+    elif model_type == 'unet_vae':
+        template = """# UNet VAE Training Configuration for frame-twin
+# This config trains a UNet-based VAE with skip connections for better edge preservation
+
+[metadata]
+name = "lnp_unet_vae_training"
+description = "UNet VAE training for LNP voxel structure compression with skip connections"
+random_seed = 42
+
+[data]
+library_uuid = "REPLACE_WITH_LIBRARY_UUID"  # Use 'frame library list' to find UUID
+split_strategy = "random"  # or "stratified"
+train_ratio = 0.8
+val_ratio = 0.1
+test_ratio = 0.1
+# stratify_params = ["shell1_radius_nm", "shell2_probability"]  # for stratified splitting
+
+[model]
+type = "unet_vae"  # Use UNet architecture with skip connections
+input_channels = 10  # Number of material channels
+latent_channels = 8  # Small latent space dimension
+base_channels = 8  # Base number of channels (doubles each level) - REDUCED for memory
+levels = 3  # Number of downsampling levels (128³ → 16³ latent)
+norm_groups = 8  # Number of groups for GroupNorm
+
+[training]
+device = "cuda"  # "cuda", "mps", or "cpu"
+distributed = false  # Set true for DDP
+num_epochs = 100
+num_workers = 4
+batch_size = 1  # REDUCED for memory (UNet with skips is memory-intensive)
+learning_rate = 2e-4
+optimizer = "adam"  # "adam", "adamw", or "sgd"
+scheduler = "cosine"  # "cosine", "step", or "none"
+grad_clip = 1.0  # Gradient clipping value (None to disable)
+kl_warmup_epochs = 15
+
+[loss]
+reconstruction_weight = 1.0
+kl_weight = 0.001
+reconstruction_type = "bce_logits"  # "mse" | "l1" | "bce_logits"
+mask_threshold = 0.005
+bg_weight = 0.0
+edge_weight = 0.1  # Edge-preserving loss (optional, helps with sharp boundaries)
+
+[checkpointing]
+experiments_dir = "/Users/tbm/frame_data/experiments"  # Base directory for experiments
+save_every_epochs = 1
+save_every_minutes = 60  # Time-based checkpointing
+keep_last_n = 5
+save_best = true  # Save best validation loss
+
+[logging]
+log_every_steps = 25
+n_recon_compare = 100
+"""
+    
+    elif model_type == 'ddpm':
+        template = """# DDPM Training Configuration for frame-twin
+# This config trains a DDPM model with FiLM conditioning and Classifier-Free Guidance
+
+[metadata]
+name = "ddpm_lnp_film_cfg"
+description = "DDPM training with FiLM conditioning and CFG for LNP structures"
+random_seed = 42
+
+[data]
+library_uuid = "REPLACE_WITH_LIBRARY_UUID"  # Use 'frame library list' to find UUID
+split_strategy = "random"
+train_ratio = 0.8
+val_ratio = 0.1
+test_ratio = 0.1
+
+[model]
+type = "ddpm"
+conditioning_strategy = "film"  # Options: "concat", "cross_attention", "adaptive_norm", "film"
+vae_experiment_uuid = "REPLACE_WITH_VAE_EXPERIMENT_UUID"  # Reference VAE experiment by UUID
+freeze_vae = true
+latent_channels = 8
+timesteps = 1000
+beta_schedule = "cosine"  # Cosine schedule often works better than linear
+unet_channels = [16, 32, 64, 128]
+attention_resolutions = [8, 16]
+
+# Classifier-free guidance parameters
+conditioning_dropout = 0.1  # 10% chance to drop conditioning during training for CFG
+cfg_scale = 2.0  # Guidance scale for validation samples (1.0 = no guidance)
+
+[model.conditioning]
+# Shared parameters
+param_embedding_dim = 128
+
+# FiLM-specific parameters
+film_hidden_dim = 256  # Hidden dimension for FiLM scale/shift MLP
+
+# Uncomment for other conditioning strategies:
+# For cross-attention:
+# num_attention_heads = 8
+# num_attention_layers = 4
+# For adaptive normalization:
+# use_adaptive_group_norm = true
+
+[training]
+device = "cuda"  # "cuda", "mps", or "cpu"
+distributed = false
+num_epochs = 200
+num_workers = 4
+batch_size = 2
+learning_rate = 2e-4
+optimizer = "adam"
+scheduler = "cosine"
+
+[loss]
+loss_type = "mse"  # "mse" or "mae"
+
+[checkpointing]
+experiments_dir = "/Users/tbm/frame_data/experiments"  # Base directory for experiments
+save_every_epochs = 5
+save_every_minutes = 60
+keep_last_n = 3
+save_best = true
+
+[logging]
+log_every_steps = 50
+n_recon_compare = 100  # Log generated samples every N steps (both training and validation)
+"""
+    
+    else:
+        raise ValueError(f"Unknown model type: {model_type}. Expected 'vae', 'unet_vae', or 'ddpm'")
+    
+    # Write template to file
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, 'w') as f:
+        f.write(template)
+    
+    print(f"Generated {model_type} config template: {output_path}")
+    print("Please edit the config file to replace placeholder values:")
+    print("- REPLACE_WITH_LIBRARY_UUID: Use 'frame library list' to find your library UUID")
+    if model_type == 'ddpm':
+        print("- REPLACE_WITH_VAE_EXPERIMENT_UUID: Use 'frame experiment list' to find your VAE experiment UUID")
 
 
 def validate_vae_reconstruction(

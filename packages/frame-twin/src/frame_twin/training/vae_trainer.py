@@ -13,7 +13,7 @@ from ..config import VAEConfig
 class VAETrainer(BaseTrainer):
     """Trainer for VAE models."""
     
-    def __init__(self, config: VAEConfig):
+    def __init__(self, config: VAEConfig, experiment=None):
         # Create model based on type
         if config.model.type == "vae":
             from ..models import VAE
@@ -80,12 +80,29 @@ class VAETrainer(BaseTrainer):
         train_loader = None
         val_loader = None
         
-        # Create checkpoint manager
+        # Create checkpoint manager with experiment-specific path
         from ..checkpointing import CheckpointManager
-        checkpoint_manager = CheckpointManager(config.checkpointing)
+        from pathlib import Path
+        if experiment is not None:
+            checkpoint_manager = CheckpointManager(
+                config.checkpointing,
+                output_dir=str(experiment.path / "checkpoints")
+            )
+        else:
+            checkpoint_manager = CheckpointManager(config.checkpointing)
         
         # Setup device
         device = torch.device(config.training.device)
+        
+        # Update logging config with experiment-specific TensorBoard path
+        import copy
+        logging_config = copy.copy(config.logging)
+        if experiment is not None:
+            # Set TensorBoard directory to experiment's logs
+            logging_config.tensorboard_dir = str(experiment.path / "logs" / "tensorboard")
+        elif config.logging.tensorboard_dir is None:
+            # Fallback to experiments_dir if no experiment provided
+            logging_config.tensorboard_dir = str(Path(config.checkpointing.experiments_dir) / "logs" / "tensorboard")
         
         # Initialize base trainer
         super().__init__(
@@ -96,12 +113,13 @@ class VAETrainer(BaseTrainer):
             scheduler=scheduler,
             loss_fn=loss_fn,
             training_config=config.training,
-            logging_config=config.logging,
+            logging_config=logging_config,
             checkpoint_manager=checkpoint_manager,
             device=device
         )
         
         self.config = config
+        self.experiment = experiment
     
     def set_data_loaders(self, train_loader: DataLoader, val_loader: DataLoader):
         """Set data loaders after initialization."""

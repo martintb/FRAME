@@ -2,12 +2,12 @@
 # This config trains a UNet-based VAE with skip connections for better edge preservation
 
 [metadata]
-name = "lnp_unet_vae"
+name = "lnp_unet_vae_8b_3l"
 description = "UNet VAE training for LNP voxel structure compression with skip connections"
 random_seed = 42
 
 [data]
-voxel_library_path = "./output/lnp_5k_10ch/voxels.zarr"
+library_uuid = "lib_454c2a20e77b"  # lnp_5k_10ch library
 split_strategy = "random"  # or "stratified"
 train_ratio = 0.8
 val_ratio = 0.1
@@ -18,7 +18,7 @@ test_ratio = 0.1
 type = "unet_vae"  # Use UNet architecture with skip connections
 input_channels = 10  # Number of material channels
 latent_channels = 8  # Small latent space dimension
-base_channels = 16  # Base number of channels (doubles each level) - REDUCED for memory
+base_channels = 8  # Base number of channels (doubles each level) - REDUCED for memory
 levels = 3  # Number of downsampling levels (128³ → 16³ latent)
 norm_groups = 8  # Number of groups for GroupNorm
 
@@ -43,14 +43,13 @@ bg_weight = 0.0
 edge_weight = 0.1  # Edge-preserving loss (optional, helps with sharp boundaries)
 
 [checkpointing]
-output_dir = "./output/lnp_5k_10ch/checkpoints_v2/unet_vae_5k_3l_l8_b32"
-save_every_epochs = 10
+experiments_dir = "/Users/tbm/frame_data/experiments"  # Base directory for experiments
+save_every_epochs = 1
 save_every_minutes = 60  # Time-based checkpointing
-keep_last_n = 3
+keep_last_n = 5
 save_best = true  # Save best validation loss
 
 [logging]
 log_every_steps = 25
-tensorboard_dir = "./output/lnp_5k_10ch/logs_v2/unet_vae_5k_3l_l8_b32"
-n_recon_compare = 25
+n_recon_compare = 100
 

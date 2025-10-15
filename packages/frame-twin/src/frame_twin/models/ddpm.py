@@ -429,6 +429,31 @@ class DDPM(nn.Module):
         
         return sqrt_alphas_cumprod_t * x_start + sqrt_one_minus_alphas_cumprod_t * noise
     
+    def apply_conditioning_dropout(
+        self, 
+        conditioning: Optional[torch.Tensor], 
+        dropout_prob: float
+    ) -> Optional[torch.Tensor]:
+        """Apply conditioning dropout for classifier-free guidance training.
+        
+        Args:
+            conditioning: Conditioning tensor (B, conditioning_dim)
+            dropout_prob: Probability of dropping conditioning (0.0 to 1.0)
+            
+        Returns:
+            Conditioning tensor with some samples set to zeros
+        """
+        if conditioning is None or dropout_prob <= 0.0 or not self.training:
+            return conditioning
+        
+        # Create dropout mask
+        batch_size = conditioning.shape[0]
+        keep_mask = torch.rand(batch_size, device=conditioning.device) > dropout_prob
+        
+        # Apply mask (zero out dropped samples)
+        keep_mask = keep_mask.float().view(-1, 1)  # Shape: (B, 1)
+        return conditioning * keep_mask
+    
     def predict_noise(self, x: torch.Tensor, t: torch.Tensor, conditioning: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Predict noise in x_t."""
         # Apply conditioning if provided
@@ -437,14 +462,44 @@ class DDPM(nn.Module):
         
         return self.unet(x, t, conditioning)
     
-    def p_sample(self, x: torch.Tensor, t: torch.Tensor, conditioning: Optional[torch.Tensor] = None) -> torch.Tensor:
-        """Sample from p(x_{t-1} | x_t).
+    def p_sample(
+        self, 
+        x: torch.Tensor, 
+        t: torch.Tensor, 
+        conditioning: Optional[torch.Tensor] = None,
+        cfg_scale: float = 1.0
+    ) -> torch.Tensor:
+        """Sample from p(x_{t-1} | x_t) with optional classifier-free guidance.
         
         Uses the epsilon-prediction formulation:
         μ_θ(x_t, t) = (1/√α_t) * (x_t - (β_t/√(1-ᾱ_t)) * ε_θ(x_t, t))
+        
+        Args:
+            x: Noisy latent at timestep t
+            t: Current timestep
+            conditioning: Optional conditioning tensor
+            cfg_scale: Classifier-free guidance scale. 
+                      1.0 = no guidance (conditional only)
+                      > 1.0 = stronger conditioning influence
+                      
+        Returns:
+            Sample at timestep t-1
         """
-        # Predict noise
-        predicted_noise = self.predict_noise(x, t, conditioning)
+        # Predict noise with classifier-free guidance if enabled
+        if cfg_scale > 1.0 and conditioning is not None and self.conditioning_strategy is not None:
+            # Conditional prediction
+            predicted_noise_cond = self.predict_noise(x, t, conditioning)
+            
+            # Unconditional prediction (zero conditioning)
+            null_conditioning = torch.zeros_like(conditioning)
+            predicted_noise_uncond = self.predict_noise(x, t, null_conditioning)
+            
+            # Apply classifier-free guidance
+            # ε = ε_uncond + cfg_scale * (ε_cond - ε_uncond)
+            predicted_noise = predicted_noise_uncond + cfg_scale * (predicted_noise_cond - predicted_noise_uncond)
+        else:
+            # Standard conditional or unconditional prediction
+            predicted_noise = self.predict_noise(x, t, conditioning)
         
         # Calculate coefficients for epsilon-prediction formula
         sqrt_alpha_t = torch.sqrt(self.alphas[t]).reshape(-1, 1, 1, 1, 1)
@@ -462,8 +517,24 @@ class DDPM(nn.Module):
             noise = torch.randn_like(x)
             return posterior_mean + torch.sqrt(posterior_variance) * noise
     
-    def p_sample_loop(self, shape: Tuple[int, ...], conditioning: Optional[torch.Tensor] = None) -> torch.Tensor:
-        """Sample from the model."""
+    def p_sample_loop(
+        self, 
+        shape: Tuple[int, ...], 
+        conditioning: Optional[torch.Tensor] = None,
+        cfg_scale: float = 1.0,
+        show_progress: bool = True
+    ) -> torch.Tensor:
+        """Sample from the model with optional classifier-free guidance.
+        
+        Args:
+            shape: Shape of samples to generate (batch_size, channels, D, H, W)
+            conditioning: Optional conditioning tensor
+            cfg_scale: Classifier-free guidance scale (1.0 = no guidance)
+            show_progress: Whether to show progress bar
+            
+        Returns:
+            Generated samples in latent space
+        """
         device = next(self.parameters()).device
         b = shape[0]
         
@@ -472,19 +543,42 @@ class DDPM(nn.Module):
         
         # Reverse diffusion
         timestep_range = list(reversed(range(self.timesteps)))
-        for i in tqdm(timestep_range, desc="DDPM sampling"):
+        if show_progress:
+            timestep_range = tqdm(timestep_range, desc="DDPM sampling")
+        
+        for i in timestep_range:
             t = torch.full((b,), i, device=device, dtype=torch.long)
-            x = self.p_sample(x, t, conditioning)
+            x = self.p_sample(x, t, conditioning, cfg_scale=cfg_scale)
         
         return x
     
-    def forward(self, x: torch.Tensor, t: torch.Tensor, conditioning: Optional[torch.Tensor] = None) -> torch.Tensor:
-        """Forward pass for training."""
+    def forward(
+        self, 
+        x: torch.Tensor, 
+        t: torch.Tensor, 
+        conditioning: Optional[torch.Tensor] = None,
+        conditioning_dropout: float = 0.0
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Forward pass for training.
+        
+        Args:
+            x: Clean latent samples
+            t: Timesteps
+            conditioning: Optional conditioning tensor
+            conditioning_dropout: Probability of dropping conditioning for CFG training
+            
+        Returns:
+            Tuple of (predicted_noise, actual_noise)
+        """
         # Sample noise
         noise = torch.randn_like(x)
         
         # Add noise to x
         x_noisy = self.q_sample(x, t, noise)
+        
+        # Apply conditioning dropout if specified
+        if conditioning_dropout > 0.0:
+            conditioning = self.apply_conditioning_dropout(conditioning, conditioning_dropout)
         
         # Predict noise
         predicted_noise = self.predict_noise(x_noisy, t, conditioning)

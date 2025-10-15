@@ -15,7 +15,7 @@ class MetadataConfig(BaseModel):
 
 class DataConfig(BaseModel):
     """Data loading configuration."""
-    voxel_library_path: str
+    library_uuid: str  # Library UUID or path to voxel library
     split_strategy: Literal["random", "stratified"] = "random"
     train_ratio: float = Field(0.8, ge=0.0, le=1.0)
     val_ratio: float = Field(0.1, ge=0.0, le=1.0)
@@ -60,13 +60,16 @@ class DDPMConditioningConfig(BaseModel):
     
     # For adaptive normalization strategy
     use_adaptive_group_norm: Optional[bool] = None
+    
+    # For FiLM strategy
+    film_hidden_dim: Optional[int] = Field(None, gt=0)
 
 
 class DDPMModelConfig(BaseModel):
     """DDPM model configuration."""
     type: Literal["ddpm"] = "ddpm"
-    conditioning_strategy: Literal["concat", "cross_attention", "adaptive_norm"]
-    vae_checkpoint: str
+    conditioning_strategy: Literal["concat", "cross_attention", "adaptive_norm", "film"]
+    vae_experiment_uuid: str  # VAE experiment UUID or path to checkpoint
     freeze_vae: bool = True
     
     # DDPM-specific parameters
@@ -75,6 +78,10 @@ class DDPMModelConfig(BaseModel):
     beta_schedule: Literal["linear", "cosine"] = "linear"
     unet_channels: List[int]
     attention_resolutions: List[int]
+    
+    # Classifier-free guidance parameters
+    conditioning_dropout: float = Field(0.0, ge=0.0, le=1.0, description="Probability of dropping conditioning during training for CFG")
+    cfg_scale: float = Field(1.0, ge=1.0, description="Classifier-free guidance scale for inference (1.0 = no guidance)")
     
     # Conditioning configuration
     conditioning: DDPMConditioningConfig
@@ -113,7 +120,7 @@ class LossConfig(BaseModel):
 
 class CheckpointingConfig(BaseModel):
     """Checkpointing configuration."""
-    output_dir: str
+    experiments_dir: str = "/Users/tbm/frame_data/experiments"  # Base directory for experiments
     save_every_epochs: int = Field(gt=0)
     save_every_minutes: int = Field(gt=0)
     keep_last_n: int = Field(gt=0)
@@ -123,8 +130,8 @@ class CheckpointingConfig(BaseModel):
 class LoggingConfig(BaseModel):
     """Logging configuration."""
     log_every_steps: int = Field(gt=0)
-    tensorboard_dir: Optional[str] = None
-    n_recon_compare: Optional[int] = Field(0, ge=0)
+    tensorboard_dir: Optional[str] = None  # Will be set to experiment's log directory
+    n_recon_compare: Optional[int] = Field(0, ge=0)  # Log reconstruction comparison every N steps
 
 
 class SamplingConfig(BaseModel):
@@ -132,6 +139,7 @@ class SamplingConfig(BaseModel):
     num_samples: int = Field(gt=0)
     ddpm_steps: int = Field(gt=0)
     eta: float = Field(0.0, ge=0.0, le=1.0)
+    cfg_scale: float = Field(1.0, ge=1.0, description="Classifier-free guidance scale (1.0 = no guidance)")
     device: str = Field(default="auto", description="Device to run inference on: 'auto', 'cuda', 'mps', or 'cpu'")
 
 

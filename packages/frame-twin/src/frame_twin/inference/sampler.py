@@ -11,7 +11,8 @@ from ..models import VAE, UNetVAE, DDPM
 from ..models.conditioning import (
     ConcatenationConditioning,
     CrossAttentionConditioning,
-    AdaptiveNormalizationConditioning
+    AdaptiveNormalizationConditioning,
+    FiLMConditioning
 )
 from frame.storage import VoxelLibrary, VoxelLibraryWriter
 from frame.voxel_grid import VoxelGrid
@@ -141,6 +142,12 @@ class Sampler:
                 parameter_names=parameter_names,
                 use_adaptive_group_norm=conditioning_config['use_adaptive_group_norm']
             )
+        elif conditioning_strategy == "film":
+            return FiLMConditioning(
+                param_embedding_dim=conditioning_config['param_embedding_dim'],
+                hidden_dim=conditioning_config.get('film_hidden_dim', 256),
+                parameter_names=parameter_names
+            )
         else:
             raise ValueError(f"Unknown conditioning strategy: {conditioning_strategy}")
     
@@ -149,16 +156,18 @@ class Sampler:
         num_samples: int,
         conditioning: Optional[Dict[str, Any]] = None,
         ddpm_steps: Optional[int] = None,
-        eta: float = 0.0
+        eta: float = 0.0,
+        cfg_scale: float = 1.0
     ) -> List[VoxelGrid]:
         """
-        Generate structures with optional parameter conditioning.
+        Generate structures with optional parameter conditioning and CFG.
         
         Args:
             num_samples: Number of structures to generate
             conditioning: Dictionary of parameter values (None values use mask tokens)
             ddpm_steps: Number of DDPM sampling steps (None = use model default)
             eta: DDPM sampling parameter (0.0 = DDPM, 1.0 = DDIM)
+            cfg_scale: Classifier-free guidance scale (1.0 = no guidance, >1.0 = stronger)
             
         Returns:
             List of generated VoxelGrid structures
@@ -179,10 +188,14 @@ class Sampler:
             
             if ddpm_steps is not None and ddpm_steps != self.ddpm.timesteps:
                 # Use custom sampling steps
-                latents = self._sample_with_custom_steps(latent_shape, conditioning_tensor, ddpm_steps, eta)
+                latents = self._sample_with_custom_steps(
+                    latent_shape, conditioning_tensor, ddpm_steps, eta, cfg_scale
+                )
             else:
                 # Use default sampling
-                latents = self.ddpm.p_sample_loop(latent_shape, conditioning_tensor)
+                latents = self.ddpm.p_sample_loop(
+                    latent_shape, conditioning_tensor, cfg_scale=cfg_scale
+                )
             
             # Decode to voxel space
             print("Decoding latents to voxel space...")
@@ -216,9 +229,10 @@ class Sampler:
         shape: tuple,
         conditioning: Optional[torch.Tensor],
         steps: int,
-        eta: float
+        eta: float,
+        cfg_scale: float = 1.0
     ) -> torch.Tensor:
-        """Sample with custom number of steps."""
+        """Sample with custom number of steps and optional CFG."""
         device = self.device
         b = shape[0]
         
@@ -230,12 +244,26 @@ class Sampler:
         
         # Reverse diffusion with custom steps
         sampling_type = "DDIM" if eta > 0 else "DDPM"
+        if cfg_scale > 1.0:
+            sampling_type += f" + CFG({cfg_scale})"
         pbar = tqdm(enumerate(timesteps), total=len(timesteps), desc=f"{sampling_type} sampling")
         for i, t in pbar:
             t_batch = torch.full((b,), t, device=device, dtype=torch.long)
             
-            # Predict noise
-            predicted_noise = self.ddpm.predict_noise(x, t_batch, conditioning)
+            # Predict noise with CFG if enabled
+            if cfg_scale > 1.0 and conditioning is not None:
+                # Conditional prediction
+                predicted_noise_cond = self.ddpm.predict_noise(x, t_batch, conditioning)
+                
+                # Unconditional prediction
+                null_conditioning = torch.zeros_like(conditioning)
+                predicted_noise_uncond = self.ddpm.predict_noise(x, t_batch, null_conditioning)
+                
+                # Apply classifier-free guidance
+                predicted_noise = predicted_noise_uncond + cfg_scale * (predicted_noise_cond - predicted_noise_uncond)
+            else:
+                # Standard prediction
+                predicted_noise = self.ddpm.predict_noise(x, t_batch, conditioning)
             
             # Calculate coefficients
             alpha_t = self.ddpm.alphas_cumprod[t]
@@ -306,15 +334,17 @@ class Sampler:
         conditioning: Optional[Dict[str, Any]] = None,
         ddpm_steps: Optional[int] = None,
         eta: float = 0.0,
+        cfg_scale: float = 1.0,
         save_parameters: bool = True
     ) -> None:
-        """Generate structures and save them to disk."""
+        """Generate structures and save them to disk with optional CFG."""
         # Generate structures
         voxel_grids = self.generate(
             num_samples=num_samples,
             conditioning=conditioning,
             ddpm_steps=ddpm_steps,
-            eta=eta
+            eta=eta,
+            cfg_scale=cfg_scale
         )
         
         # Save structures

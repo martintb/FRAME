@@ -1,0 +1,61 @@
+# DDPM Training Configuration with FiLM Conditioning and Classifier-Free Guidance
+# This example shows how to use the FiLM conditioning strategy with CFG
+
+[metadata]
+name = "lnp_ddpm_film_cfg"
+random_seed = 42
+
+[data]
+voxel_library_path = "frame_data/libraries/lnp_5k_10ch/voxels.zarr"
+split_strategy = "random"
+train_ratio = 0.8
+val_ratio = 0.1
+test_ratio = 0.1
+
+[model]
+type = "ddpm"
+conditioning_strategy = "film"  # Using FiLM conditioning
+vae_checkpoint = "frame_data/experiments/vae_lnp_baseline/checkpoints/best.pt"
+freeze_vae = true
+
+# DDPM parameters
+latent_channels = 32
+timesteps = 1000
+beta_schedule = "cosine"  # Cosine schedule often works better than linear
+unet_channels = [32, 64, 128, 256]
+attention_resolutions = [8, 16]
+
+# Classifier-free guidance parameters
+conditioning_dropout = 0.1  # 10% chance to drop conditioning during training
+cfg_scale = 2.0  # Guidance scale for inference (1.0 = no guidance, higher = stronger)
+
+[model.conditioning]
+param_embedding_dim = 128
+film_hidden_dim = 256  # FiLM-specific: hidden dimension for scale/shift MLP
+
+[training]
+device = "cuda"
+distributed = false
+num_epochs = 100
+batch_size = 4
+learning_rate = 1e-4
+optimizer = "adamw"
+scheduler = "cosine"
+num_workers = 4
+grad_clip = 1.0
+
+[loss]
+loss_type = "mse"  # Options: "mse", "mae"
+
+[checkpointing]
+output_dir = "frame_data/experiments/ddpm_lnp_film_cfg"
+save_every_epochs = 5
+save_every_minutes = 30
+keep_last_n = 3
+save_best = true
+
+[logging]
+log_every_steps = 10
+tensorboard_dir = "frame_data/experiments/ddpm_lnp_film_cfg/tensorboard"
+n_recon_compare = 4  # Number of reconstruction comparisons to log
+

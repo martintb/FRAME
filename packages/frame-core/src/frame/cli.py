@@ -423,10 +423,38 @@ def main():
         # Fallback handling for geo
         import subprocess
         subprocess.run(["frame-geo"] + args.geo_args)
-    elif args.command == "twin" and hasattr(args, "twin_args"):
-        # Fallback handling for twin
-        import subprocess
-        subprocess.run(["frame-twin"] + args.twin_args)
+    elif args.command == "twin":
+        # Handle twin commands
+        if hasattr(args, "twin_command"):
+            # Integrated twin subcommands
+            from frame_twin import cli as twin_cli
+            if args.twin_command == "train":
+                twin_cli.train(args.config)
+            elif args.twin_command == "generate-config":
+                twin_cli.generate_config(args.model_type, args.output)
+            elif args.twin_command == "generate":
+                twin_cli.generate_structures(args.config)
+            elif args.twin_command == "evaluate":
+                twin_cli.evaluate_model(args.config, args.checkpoint)
+            elif args.twin_command == "validate-vae":
+                twin_cli.validate_vae_reconstruction(
+                    args.checkpoint, 
+                    args.voxel_library, 
+                    args.structure_id, 
+                    args.device
+                )
+            elif args.twin_command == "continue":
+                twin_cli.continue_training(args.experiment_uuid, args.config if hasattr(args, 'config') else None)
+            else:
+                print(f"Unknown twin command: {args.twin_command}")
+                sys.exit(1)
+        elif hasattr(args, "twin_args"):
+            # Fallback handling for twin
+            import subprocess
+            subprocess.run(["frame-twin"] + args.twin_args)
+        else:
+            print("No twin command specified")
+            sys.exit(1)
     else:
         print(f"Unknown command: {args.command}")
         parser.print_help()

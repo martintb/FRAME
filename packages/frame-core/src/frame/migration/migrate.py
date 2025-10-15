@@ -285,3 +285,150 @@ def migrate_lnp_5k_10ch(
     
     return results
 
+
+def migrate_experiment(
+    experiment_dir: Path,
+    library_uuid: str,
+    model_type: str,
+    tags: Optional[list[str]] = None,
+    dependencies: Optional[dict[str, str]] = None,
+    logs_dir: Optional[Path] = None,
+) -> str:
+    """Migrate a single experiment with its checkpoints and logs.
+    
+    Args:
+        experiment_dir: Path to experiment directory containing config.toml and *.pt files
+        library_uuid: UUID of the library this experiment uses
+        model_type: Type of model (e.g., 'vae', 'ddpm', 'unet_vae')
+        tags: Optional tags for the experiment
+        dependencies: Optional dict of model dependencies (e.g., {'vae_checkpoint': 'ckpt_xyz'})
+        logs_dir: Optional path to tensorboard logs directory
+    
+    Returns:
+        UUID of created experiment
+    """
+    import shutil
+    
+    if not experiment_dir.exists():
+        raise ValueError(f"Experiment directory not found: {experiment_dir}")
+    
+    config_path = experiment_dir / "config.toml"
+    if not config_path.exists():
+        raise ValueError(f"Config file not found: {config_path}")
+    
+    print(f"\nMigrating experiment from {experiment_dir.name}...")
+    
+    # Create experiment
+    exp_mgr = ExperimentManager()
+    experiment = exp_mgr.create_experiment(
+        name=experiment_dir.name,
+        model_type=model_type,
+        library_uuid=library_uuid,
+        config_path=config_path,
+        tags=tags or [],
+        dependencies=dependencies or {},
+    )
+    
+    # Migrate checkpoints
+    checkpoints = {}
+    for ckpt_file in experiment_dir.glob("*.pt"):
+        # Parse epoch/step from filename
+        if "best" in ckpt_file.name:
+            # Estimate epoch/step for best model
+            epoch, step = 100, 100000
+        elif "checkpoint_epoch_" in ckpt_file.name:
+            parts = ckpt_file.stem.replace("checkpoint_epoch_", "").split("_step_")
+            epoch = int(parts[0])
+            step = int(parts[1]) if len(parts) > 1 else epoch * 1000
+        else:
+            # Unknown format, skip
+            print(f"  Skipping {ckpt_file.name} (unknown format)")
+            continue
+        
+        checkpoint = experiment.register_checkpoint(
+            checkpoint_path=ckpt_file,
+            epoch=epoch,
+            step=step,
+            metrics={},
+        )
+        checkpoints[ckpt_file.name] = checkpoint.uuid
+        print(f"  ✓ Registered checkpoint: {ckpt_file.name}")
+        
+        if "best" in ckpt_file.name:
+            experiment.set_best_checkpoint(checkpoint.uuid)
+            print(f"    Marked as best checkpoint")
+    
+    # Copy tensorboard logs if provided
+    if logs_dir and logs_dir.exists():
+        dest_logs = experiment.path / "logs" / "tensorboard"
+        log_count = 0
+        for log_file in logs_dir.glob("events.out.tfevents.*"):
+            shutil.copy2(log_file, dest_logs / log_file.name)
+            log_count += 1
+        if log_count > 0:
+            print(f"  ✓ Copied {log_count} tensorboard log file(s)")
+    
+    experiment.update_status("completed")
+    print(f"✓ Experiment migrated: {experiment.uuid}")
+    print(f"  Location: {experiment.path}")
+    
+    return experiment.uuid
+
+
+def migrate_specific_experiments(
+    old_base_path: Path,
+    library_uuid: str,
+    experiments_to_migrate: list[dict],
+) -> dict:
+    """Migrate specific experiments from an old directory structure.
+    
+    Args:
+        old_base_path: Base path containing checkpoints_v2/ and logs_v2/
+        library_uuid: UUID of the already-migrated library
+        experiments_to_migrate: List of dicts with keys:
+            - name: experiment directory name
+            - model_type: 'vae', 'ddpm', 'unet_vae', etc.
+            - tags: list of tags (optional)
+            - dependencies: dict of dependencies (optional)
+    
+    Returns:
+        Dictionary mapping experiment names to their UUIDs
+    """
+    results = {}
+    
+    print(f"Migrating experiments from {old_base_path}")
+    print("=" * 60)
+    
+    for exp_info in experiments_to_migrate:
+        name = exp_info['name']
+        experiment_dir = old_base_path / "checkpoints_v2" / name
+        logs_dir = old_base_path / "logs_v2" / name
+        
+        if not logs_dir.exists():
+            logs_dir = None
+        
+        try:
+            exp_uuid = migrate_experiment(
+                experiment_dir=experiment_dir,
+                library_uuid=library_uuid,
+                model_type=exp_info['model_type'],
+                tags=exp_info.get('tags', []),
+                dependencies=exp_info.get('dependencies'),
+                logs_dir=logs_dir,
+            )
+            results[name] = exp_uuid
+        except Exception as e:
+            print(f"✗ Failed to migrate {name}: {e}")
+            results[name] = None
+    
+    print("\n" + "=" * 60)
+    print("Migration complete!")
+    print(f"\nResults:")
+    for name, uuid in results.items():
+        if uuid:
+            print(f"  ✓ {name}: {uuid}")
+        else:
+            print(f"  ✗ {name}: FAILED")
+    
+    return results
+

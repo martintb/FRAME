@@ -1,0 +1,41 @@
+# Inference Configuration with Classifier-Free Guidance
+# This example shows how to generate samples using CFG
+
+[metadata]
+name = "lnp_generation_cfg"
+random_seed = 42
+
+[model]
+vae_checkpoint = "frame_data/experiments/vae_lnp_baseline/checkpoints/best.pt"
+ddpm_checkpoint = "frame_data/experiments/ddpm_lnp_film_cfg/checkpoints/best.pt"
+
+[sampling]
+num_samples = 10
+ddpm_steps = 100  # Can use fewer steps than training (1000) for faster generation
+eta = 0.0  # 0.0 = DDPM, 1.0 = DDIM (DDIM is faster but may be less diverse)
+cfg_scale = 2.5  # Classifier-free guidance scale (experiment with 1.5-3.0)
+device = "auto"  # Will auto-detect CUDA/MPS/CPU
+
+# Parameter conditioning (optional)
+# Set specific parameter values or leave as null to use mask tokens
+[conditioning]
+shell1_radius_nm = 60.0
+shell1_head_thickness_nm = 2.0
+shell1_tail_thickness_nm = 3.0
+shell2_probability = null  # null = use mask token (unconditional)
+shell2_head_thickness_nm = null
+shell2_tail_thickness_nm = null
+payload_core_radius_nm = 5.0
+payload_shell_head_thickness_nm = 1.5
+payload_shell_tail_thickness_nm = 2.0
+payload_packing_fraction = 0.3
+target_num_blebs = 3.0
+bleb_shell_radius_nm = 8.0
+bleb_shell_head_thickness_nm = 2.0
+bleb_shell_tail_thickness_nm = 2.5
+
+[output]
+output_path = "generated_structures_cfg"
+save_voxels = true
+save_parameters = true
+

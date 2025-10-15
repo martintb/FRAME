@@ -113,3 +113,5 @@ docs/site/
 
 # Local development sandbox
 dev/
+.cursor/plans/
+frame_data/

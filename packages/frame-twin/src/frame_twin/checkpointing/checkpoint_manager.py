@@ -13,9 +13,10 @@ from ..config import CheckpointingConfig
 class CheckpointManager:
     """Manages saving and loading of training checkpoints."""
     
-    def __init__(self, config: CheckpointingConfig):
+    def __init__(self, config: CheckpointingConfig, output_dir: str = None):
         self.config = config
-        self.output_dir = Path(config.output_dir)
+        # Use provided output_dir if given, otherwise use experiments_dir from config
+        self.output_dir = Path(output_dir) if output_dir else Path(config.experiments_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
         # Track checkpoint history

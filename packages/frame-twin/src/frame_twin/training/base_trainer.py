@@ -151,6 +151,16 @@ class BaseTrainer:
                 epoch_metrics['val_loss'] += loss.item()
                 epoch_metrics['num_batches'] += 1
                 
+                # Periodic reconstruction comparison images (step-based)
+                if getattr(self.logging_config, 'n_recon_compare', 0):
+                    n_rc = self.logging_config.n_recon_compare or 0
+                    if n_rc > 0 and (self.global_step % n_rc == 0):
+                        try:
+                            self._log_reconstruction_images(batch, metrics, step=self.global_step)
+                        except Exception:
+                            # Avoid crashing training due to visualization
+                            pass
+                
                 # Explicitly free memory
                 del loss, batch
                 if self.device.type == 'mps':
