@@ -204,7 +204,8 @@ class UNetVAE(nn.Module):
         latent_channels: int,
         base_channels: int,
         levels: int,
-        norm_groups: int = 8
+        norm_groups: int = 8,
+        skip_dropout_prob: float = 0.0
     ):
         super().__init__()
         
@@ -213,6 +214,7 @@ class UNetVAE(nn.Module):
         self.base_channels = base_channels
         self.levels = levels
         self.norm_groups = norm_groups
+        self.skip_dropout_prob = skip_dropout_prob
         
         self.encoder = EncoderUNet3D(
             input_channels, latent_channels, base_channels, levels, norm_groups
@@ -224,6 +226,11 @@ class UNetVAE(nn.Module):
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Forward pass with skip connections for reconstruction."""
         z, mu, logvar, skips = self.encoder(x)
+        
+        # Dropout for skip connections to train the no-skip path
+        if self.training and self.skip_dropout_prob > 0 and torch.rand(1).item() < self.skip_dropout_prob:
+            skips = None
+            
         x_recon = self.decoder(z, skips)
         return x_recon, z, mu, logvar
     

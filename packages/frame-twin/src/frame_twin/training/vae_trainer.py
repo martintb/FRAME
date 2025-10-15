@@ -30,7 +30,8 @@ class VAETrainer(BaseTrainer):
                 latent_channels=config.model.latent_channels,
                 base_channels=config.model.base_channels,
                 levels=config.model.levels,
-                norm_groups=config.model.norm_groups
+                norm_groups=config.model.norm_groups,
+                skip_dropout_prob=config.model.skip_dropout_prob
             )
         else:
             raise ValueError(f"Unknown model type: {config.model.type}")
@@ -197,7 +198,8 @@ class VAETrainer(BaseTrainer):
             'base_channels': self.model.base_channels,
             'levels': self.model.levels
         }
-        # Add norm_groups for UNetVAE
+        # Add norm_groups and skip_dropout_prob for UNetVAE
         if self.config.model.type == "unet_vae":
             config_dict['norm_groups'] = self.model.norm_groups
+            config_dict['skip_dropout_prob'] = self.model.skip_dropout_prob
         return config_dict

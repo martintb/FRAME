@@ -157,7 +157,8 @@ class TestUNetVAE:
             latent_channels=32,
             base_channels=32,
             levels=3,
-            norm_groups=8
+            norm_groups=8,
+            skip_dropout_prob=0.0
         )
         x = torch.randn(2, 10, 128, 128, 128)
         x_recon, z, mu, logvar = model(x)
@@ -174,7 +175,8 @@ class TestUNetVAE:
             latent_channels=32,
             base_channels=32,
             levels=3,
-            norm_groups=8
+            norm_groups=8,
+            skip_dropout_prob=0.0
         )
         x = torch.randn(2, 10, 128, 128, 128)
         z = model.encode(x)
@@ -187,7 +189,8 @@ class TestUNetVAE:
             latent_channels=32,
             base_channels=32,
             levels=3,
-            norm_groups=8
+            norm_groups=8,
+            skip_dropout_prob=0.0
         )
         z = torch.randn(2, 32, 16, 16, 16)
         x_hat = model.decode(z, skips=None)
@@ -200,7 +203,8 @@ class TestUNetVAE:
             latent_channels=32,
             base_channels=32,
             levels=3,
-            norm_groups=8
+            norm_groups=8,
+            skip_dropout_prob=0.0
         )
         z = torch.randn(2, 32, 16, 16, 16)
         skips = [
@@ -218,7 +222,8 @@ class TestUNetVAE:
             latent_channels=32,
             base_channels=32,
             levels=3,
-            norm_groups=8
+            norm_groups=8,
+            skip_dropout_prob=0.0
         )
         samples = model.sample(num_samples=4, device=torch.device('cpu'))
         assert samples.shape == (4, 10, 128, 128, 128)
@@ -297,7 +302,8 @@ class TestUNetVAE:
             latent_channels=32,
             base_channels=32,
             levels=3,
-            norm_groups=8
+            norm_groups=8,
+            skip_dropout_prob=0.0
         )
         x = torch.randn(2, 10, 128, 128, 128, requires_grad=True)
         x_recon, z, mu, logvar = model(x)

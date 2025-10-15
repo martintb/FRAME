@@ -39,7 +39,8 @@ class DDPMTrainer(BaseTrainer):
                 latent_channels=vae_config['latent_channels'],
                 base_channels=vae_config['base_channels'],
                 levels=vae_config['levels'],
-                norm_groups=vae_config.get('norm_groups', 8)
+                norm_groups=vae_config.get('norm_groups', 8),
+                skip_dropout_prob=vae_config.get('skip_dropout_prob', 0.0)
             )
         else:  # 'vae'
             vae = VAE(

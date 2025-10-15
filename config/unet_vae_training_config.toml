@@ -2,7 +2,7 @@
 # This config trains a UNet-based VAE with skip connections for better edge preservation
 
 [metadata]
-name = "lnp_unet_vae_8b_3l"
+name = "lnp_unet_vae_8b_3l_skipdrop"
 description = "UNet VAE training for LNP voxel structure compression with skip connections"
 random_seed = 42
 
@@ -21,13 +21,14 @@ latent_channels = 8  # Small latent space dimension
 base_channels = 8  # Base number of channels (doubles each level) - REDUCED for memory
 levels = 3  # Number of downsampling levels (128³ → 16³ latent)
 norm_groups = 8  # Number of groups for GroupNorm
+skip_dropout_prob = 0.1  # Probability of dropping skip connections during training (trains no-skip path for DDPM)
 
 [training]
 device = "mps"  # "cuda", "mps", or "cpu"
 distributed = false  # Set true for DDP
 num_epochs = 100
 num_workers = 0
-batch_size = 1  # REDUCED for memory (UNet with skips is memory-intensive)
+batch_size = 4  # REDUCED for memory (UNet with skips is memory-intensive)
 learning_rate = 2e-4
 optimizer = "adam"  # "adam", "adamw", or "sgd"
 scheduler = "cosine"  # "cosine", "step", or "none"

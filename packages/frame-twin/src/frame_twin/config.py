@@ -40,6 +40,7 @@ class VAEModelConfig(BaseModel):
     base_channels: int = Field(gt=0)
     levels: int = Field(gt=0, le=6)  # Max 6 levels to avoid too much compression
     norm_groups: int = Field(8, gt=0)  # Number of groups for GroupNorm (UNetVAE only)
+    skip_dropout_prob: float = Field(0.0, ge=0.0, le=1.0, description="Probability of dropping skip connections during training (UNetVAE only)")
     
     @validator('levels')
     def validate_levels(cls, v):
