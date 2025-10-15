@@ -137,13 +137,21 @@ class CheckpointManager:
         Returns:
             Checkpoint object or None if not found
         """
+        # First, try new format: UUID-based directory
         ckpt_dir = experiment_path / "checkpoints" / checkpoint_uuid
         metadata_path = ckpt_dir / "metadata.json"
         
-        if not metadata_path.exists():
-            return None
+        if metadata_path.exists():
+            return Checkpoint.from_metadata(metadata_path)
         
-        return Checkpoint.from_metadata(metadata_path)
+        # If not found, try old format: metadata file in checkpoints directory
+        ckpt_base = experiment_path / "checkpoints"
+        old_metadata_path = ckpt_base / f"{checkpoint_uuid}_metadata.json"
+        
+        if old_metadata_path.exists():
+            return Checkpoint.from_metadata(old_metadata_path)
+        
+        return None
     
     def list_checkpoints(self, experiment_path: Path) -> list[Checkpoint]:
         """List all checkpoints for an experiment.
@@ -160,6 +168,7 @@ class CheckpointManager:
         if not ckpt_base.exists():
             return checkpoints
         
+        # First, look for new format: UUID-based directories with metadata.json
         for ckpt_dir in ckpt_base.iterdir():
             if not ckpt_dir.is_dir():
                 continue
@@ -174,7 +183,96 @@ class CheckpointManager:
             except Exception:
                 continue
         
+        # If no new format checkpoints found, look for old format: direct .pt files
+        if not checkpoints:
+            for ckpt_file in ckpt_base.glob("*.pt"):
+                if not ckpt_file.is_file():
+                    continue
+                
+                try:
+                    # Create a synthetic checkpoint for old format files
+                    checkpoint = self._create_checkpoint_from_old_format(
+                        ckpt_file, experiment_path
+                    )
+                    if checkpoint:
+                        checkpoints.append(checkpoint)
+                except Exception:
+                    continue
+        
         # Sort by step
         checkpoints.sort(key=lambda x: x.step)
         return checkpoints
+    
+    def _create_checkpoint_from_old_format(self, ckpt_file: Path, experiment_path: Path) -> Optional[Checkpoint]:
+        """Create a Checkpoint object from old format .pt file.
+        
+        Args:
+            ckpt_file: Path to .pt checkpoint file
+            experiment_path: Path to experiment directory
+        
+        Returns:
+            Checkpoint object or None if creation fails
+        """
+        import torch
+        import re
+        from datetime import datetime
+        
+        try:
+            # Try to load the checkpoint to extract metadata
+            checkpoint_data = torch.load(ckpt_file, map_location='cpu')
+            
+            # Extract epoch and step from filename or checkpoint data
+            epoch = 0
+            step = 0
+            
+            # Try to extract from filename first
+            filename = ckpt_file.name
+            if "epoch" in filename and "step" in filename:
+                epoch_match = re.search(r'epoch_(\d+)', filename)
+                step_match = re.search(r'step_(\d+)', filename)
+                if epoch_match:
+                    epoch = int(epoch_match.group(1))
+                if step_match:
+                    step = int(step_match.group(1))
+            elif "best_model" in filename:
+                # For best_model.pt, try to get info from checkpoint data
+                if isinstance(checkpoint_data, dict):
+                    epoch = checkpoint_data.get('epoch', 0)
+                    step = checkpoint_data.get('global_step', 0)
+            
+            # Generate a synthetic UUID based on filename
+            import hashlib
+            uuid_hash = hashlib.md5(str(ckpt_file).encode()).hexdigest()[:12]
+            synthetic_uuid = f"ckpt_{uuid_hash}"
+            
+            # Create metadata
+            metadata = {
+                "uuid": synthetic_uuid,
+                "experiment_uuid": experiment_path.name,
+                "epoch": epoch,
+                "step": step,
+                "timestamp": datetime.fromtimestamp(ckpt_file.stat().st_mtime).isoformat(),
+                "metrics": checkpoint_data.get('metrics', {}) if isinstance(checkpoint_data, dict) else {},
+                "model_config": checkpoint_data.get('config', {}) if isinstance(checkpoint_data, dict) else {},
+            }
+            
+            # Create metadata.json file for consistency
+            metadata_path = ckpt_file.parent / f"{synthetic_uuid}_metadata.json"
+            with open(metadata_path, "w") as f:
+                json.dump(metadata, f, indent=2)
+            
+            return Checkpoint(
+                uuid=metadata["uuid"],
+                experiment_uuid=metadata["experiment_uuid"],
+                epoch=metadata["epoch"],
+                step=metadata["step"],
+                timestamp=metadata["timestamp"],
+                metrics=metadata["metrics"],
+                model_config=metadata["model_config"],
+                checkpoint_path=ckpt_file,
+                metadata_path=metadata_path
+            )
+            
+        except Exception:
+            return None
 

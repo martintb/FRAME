@@ -254,6 +254,11 @@ class ExperimentManager:
         
         # Sort by creation time
         experiments.sort(key=lambda x: x.created, reverse=True)
+        
+        # Refresh checkpoint lists for all experiments
+        for experiment in experiments:
+            self._refresh_checkpoint_list(experiment)
+        
         return experiments
     
     def get_experiment(self, uuid: str) -> Optional[Experiment]:
@@ -271,7 +276,12 @@ class ExperimentManager:
         if not manifest_path.exists():
             return None
         
-        return Experiment.from_manifest(manifest_path)
+        experiment = Experiment.from_manifest(manifest_path)
+        
+        # Refresh checkpoint list from actual files
+        self._refresh_checkpoint_list(experiment)
+        
+        return experiment
     
     def get_experiment_from_checkpoint(self, checkpoint_uuid: str) -> Optional[Experiment]:
         """Get experiment from a checkpoint UUID.
@@ -360,4 +370,41 @@ class ExperimentManager:
         # Don't write-protect manifest - it will be updated during training
         
         return Experiment.from_manifest(manifest_path)
+    
+    def _refresh_checkpoint_list(self, experiment: Experiment):
+        """Refresh the checkpoint list for an experiment by scanning the filesystem.
+        
+        Args:
+            experiment: Experiment object to refresh
+        """
+        try:
+            # Get actual checkpoints from filesystem
+            actual_checkpoints = self.ckpt_mgr.list_checkpoints(experiment.path)
+            actual_checkpoint_uuids = [ckpt.uuid for ckpt in actual_checkpoints]
+            
+            # Update experiment object
+            experiment.checkpoints = actual_checkpoint_uuids
+            
+            # If no best checkpoint is set but we have checkpoints, set the last one as best
+            if not experiment.best_checkpoint and actual_checkpoint_uuids:
+                experiment.best_checkpoint = actual_checkpoint_uuids[-1]
+            
+            # Update manifest file if checkpoint list changed
+            manifest_path = experiment.path / "manifest.json"
+            if manifest_path.exists():
+                with open(manifest_path, "r") as f:
+                    manifest_data = json.load(f)
+                
+                old_checkpoints = manifest_data.get("checkpoints", [])
+                if set(old_checkpoints) != set(actual_checkpoint_uuids):
+                    manifest_data["checkpoints"] = actual_checkpoint_uuids
+                    if not manifest_data.get("best_checkpoint") and actual_checkpoint_uuids:
+                        manifest_data["best_checkpoint"] = actual_checkpoint_uuids[-1]
+                    
+                    with open(manifest_path, "w") as f:
+                        json.dump(manifest_data, f, indent=2)
+        
+        except Exception:
+            # If refresh fails, leave experiment as-is
+            pass
 

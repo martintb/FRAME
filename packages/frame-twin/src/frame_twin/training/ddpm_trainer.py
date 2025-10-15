@@ -105,7 +105,8 @@ class DDPMTrainer(BaseTrainer):
         if experiment is not None:
             checkpoint_manager = CheckpointManager(
                 config.checkpointing,
-                output_dir=str(experiment.path / "checkpoints")
+                output_dir=str(experiment.path / "checkpoints"),
+                experiment=experiment
             )
         else:
             checkpoint_manager = CheckpointManager(config.checkpointing)
@@ -137,8 +138,9 @@ class DDPMTrainer(BaseTrainer):
             device=device
         )
         
-        self.config = config
+        # Set experiment reference for interruption handling
         self.experiment = experiment
+        self.config = config
         self.vae = vae.to(device)
         self.conditioning_strategy = conditioning_strategy
         

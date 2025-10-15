@@ -70,6 +70,10 @@ def setup_experiment_commands(subparsers):
     untag_parser = exp_subparsers.add_parser("untag", help="Remove tag from experiment")
     untag_parser.add_argument("uuid", help="Experiment UUID")
     untag_parser.add_argument("tag", help="Tag to remove")
+    
+    # Stop training
+    stop_parser = exp_subparsers.add_parser("stop", help="Stop running training")
+    stop_parser.add_argument("uuid", help="Experiment UUID")
 
 
 def setup_checkpoint_commands(subparsers):
@@ -248,6 +252,23 @@ def handle_experiment_commands(args):
             sys.exit(1)
         experiment.remove_tag(args.tag)
         print(f"Removed tag '{args.tag}' from experiment {args.uuid}")
+    
+    elif args.experiment_command == "stop":
+        experiment = exp_mgr.get_experiment(args.uuid)
+        if not experiment:
+            print(f"Experiment {args.uuid} not found")
+            sys.exit(1)
+        
+        if experiment.status != "running":
+            print(f"Experiment {args.uuid} is not running (status: {experiment.status})")
+            sys.exit(1)
+        
+        # Create a stop signal file
+        stop_signal_path = experiment.path / "stop_training"
+        stop_signal_path.touch()
+        
+        print(f"Stop signal sent to experiment {args.uuid}")
+        print("Training will stop gracefully at the next checkpoint opportunity.")
 
 
 def handle_checkpoint_commands(args):

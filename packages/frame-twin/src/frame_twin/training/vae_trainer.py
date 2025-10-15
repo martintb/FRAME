@@ -87,7 +87,8 @@ class VAETrainer(BaseTrainer):
         if experiment is not None:
             checkpoint_manager = CheckpointManager(
                 config.checkpointing,
-                output_dir=str(experiment.path / "checkpoints")
+                output_dir=str(experiment.path / "checkpoints"),
+                experiment=experiment
             )
         else:
             checkpoint_manager = CheckpointManager(config.checkpointing)
@@ -119,8 +120,9 @@ class VAETrainer(BaseTrainer):
             device=device
         )
         
-        self.config = config
+        # Set experiment reference for interruption handling
         self.experiment = experiment
+        self.config = config
     
     def set_data_loaders(self, train_loader: DataLoader, val_loader: DataLoader):
         """Set data loaders after initialization."""

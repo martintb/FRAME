@@ -1,4 +1,4 @@
-"""Checkpoint management for training."""
+"""Checkpoint management for training using frame-core system."""
 
 import torch
 import json
@@ -11,15 +11,26 @@ from ..config import CheckpointingConfig
 
 
 class CheckpointManager:
-    """Manages saving and loading of training checkpoints."""
+    """Manages saving and loading of training checkpoints using frame-core system."""
     
-    def __init__(self, config: CheckpointingConfig, output_dir: str = None):
+    def __init__(self, config: CheckpointingConfig, output_dir: str = None, experiment=None):
         self.config = config
         # Use provided output_dir if given, otherwise use experiments_dir from config
         self.output_dir = Path(output_dir) if output_dir else Path(config.experiments_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
-        # Track checkpoint history
+        # Store experiment reference for frame-core integration
+        self.experiment = experiment
+        
+        # Initialize frame-core checkpoint manager
+        try:
+            from frame.management import CheckpointManager as FrameCheckpointManager
+            self.frame_ckpt_mgr = FrameCheckpointManager()
+        except ImportError:
+            # Fallback to old system if frame-core not available
+            self.frame_ckpt_mgr = None
+        
+        # Track checkpoint history for backward compatibility
         self.checkpoint_history = []
         self.best_val_loss = float('inf')
         self.last_save_time = time.time()
@@ -60,7 +71,7 @@ class CheckpointManager:
         is_best: bool = False
     ) -> Path:
         """
-        Save a training checkpoint.
+        Save a training checkpoint using frame-core system.
         
         Args:
             model: Model to save
@@ -99,7 +110,32 @@ class CheckpointManager:
         # Save checkpoint
         torch.save(checkpoint_data, checkpoint_path)
         
-        # Update tracking
+        # Use frame-core system if available and experiment is provided
+        if self.frame_ckpt_mgr and self.experiment:
+            try:
+                # Create checkpoint using frame-core system
+                frame_checkpoint = self.frame_ckpt_mgr.create_checkpoint(
+                    experiment_path=self.experiment.path,
+                    checkpoint_file=checkpoint_path,
+                    epoch=epoch,
+                    step=global_step,
+                    metrics=metrics,
+                    model_config=config,
+                    experiment_uuid=self.experiment.uuid
+                )
+                
+                # Update experiment manifest with new checkpoint
+                if frame_checkpoint.uuid not in self.experiment.checkpoints:
+                    self.experiment.checkpoints.append(frame_checkpoint.uuid)
+                    if is_best:
+                        self.experiment.best_checkpoint = frame_checkpoint.uuid
+                    self.experiment._update_manifest()
+                
+            except Exception as e:
+                # If frame-core integration fails, continue with old system
+                print(f"Warning: frame-core checkpoint integration failed: {e}")
+        
+        # Update tracking for backward compatibility
         self.checkpoint_history.append({
             'path': str(checkpoint_path),
             'epoch': epoch,

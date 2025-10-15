@@ -6,6 +6,8 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 import numpy as np
 import time
+import signal
+import sys
 from pathlib import Path
 from typing import Dict, Any, Optional, Callable
 from tqdm import tqdm
@@ -58,6 +60,57 @@ class BaseTrainer:
         # Metrics tracking
         self.train_metrics = {}
         self.val_metrics = {}
+        
+        # Interruption handling
+        self.interrupted = False
+        self.original_sigint_handler = None
+        self.experiment = None  # Will be set by subclasses
+    
+    def _setup_signal_handlers(self):
+        """Setup signal handlers for graceful interruption."""
+        def signal_handler(signum, frame):
+            print(f"\nReceived signal {signum}. Gracefully stopping training...")
+            self.interrupted = True
+        
+        # Store original handler
+        self.original_sigint_handler = signal.signal(signal.SIGINT, signal_handler)
+    
+    def _restore_signal_handlers(self):
+        """Restore original signal handlers."""
+        if self.original_sigint_handler is not None:
+            signal.signal(signal.SIGINT, self.original_sigint_handler)
+    
+    def _check_stop_signal(self) -> bool:
+        """Check if a stop signal file exists."""
+        if self.experiment:
+            stop_signal_path = self.experiment.path / "stop_training"
+            if stop_signal_path.exists():
+                # Remove the stop signal file
+                stop_signal_path.unlink()
+                return True
+        return False
+    
+    def _handle_interruption(self, train_metrics: Dict[str, float], val_metrics: Dict[str, float]):
+        """Handle training interruption gracefully."""
+        print("\nTraining interrupted. Saving checkpoint and updating experiment status...")
+        
+        # Save final checkpoint
+        is_best = val_metrics['val_loss'] < self.best_val_loss if val_metrics else False
+        self._save_checkpoint(train_metrics, val_metrics, is_best)
+        
+        # Update experiment status
+        if self.experiment:
+            self.experiment.update_status("interrupted")
+        
+        # Close writer
+        if self.writer is not None:
+            self.writer.close()
+        
+        # Restore signal handlers
+        self._restore_signal_handlers()
+        
+        print("Training stopped gracefully. Checkpoint saved.")
+        sys.exit(0)
     
     def train_epoch(self) -> Dict[str, float]:
         """Train for one epoch."""
@@ -174,44 +227,92 @@ class BaseTrainer:
         return epoch_metrics
     
     def train(self, start_epoch: int = 0) -> None:
-        """Main training loop."""
+        """Main training loop with graceful interruption support."""
         self.current_epoch = start_epoch
         
-        for epoch in range(start_epoch, self.training_config.num_epochs):
-            self.current_epoch = epoch
-            
-            # Train epoch
-            train_metrics = self.train_epoch()
-            
-            # Validate epoch
-            val_metrics = self.validate_epoch()
-            
-            # Update scheduler
-            if self.scheduler is not None:
-                if isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
-                    self.scheduler.step(val_metrics['val_loss'])
-                else:
-                    self.scheduler.step()
-            
-            # Log epoch metrics
-            self._log_epoch_metrics(train_metrics, val_metrics)
-            
-            # Checkpointing
-            is_best = val_metrics['val_loss'] < self.best_val_loss
-            if is_best:
-                self.best_val_loss = val_metrics['val_loss']
-            
-            if self.checkpoint_manager.should_save_checkpoint(
-                epoch, val_metrics['val_loss']
-            ):
-                self._save_checkpoint(train_metrics, val_metrics, is_best)
+        # Setup signal handlers
+        self._setup_signal_handlers()
         
-        # Save final checkpoint
-        self._save_checkpoint(train_metrics, val_metrics, is_best)
-        
-        # Close writer
-        if self.writer is not None:
-            self.writer.close()
+        try:
+            for epoch in range(start_epoch, self.training_config.num_epochs):
+                # Check for interruption at the start of each epoch
+                if self.interrupted or self._check_stop_signal():
+                    self._handle_interruption(self.train_metrics, self.val_metrics)
+                
+                self.current_epoch = epoch
+                
+                # Train epoch
+                train_metrics = self.train_epoch()
+                self.train_metrics = train_metrics
+                
+                # Check for interruption after training epoch
+                if self.interrupted or self._check_stop_signal():
+                    self._handle_interruption(train_metrics, self.val_metrics)
+                
+                # Validate epoch
+                val_metrics = self.validate_epoch()
+                self.val_metrics = val_metrics
+                
+                # Check for interruption after validation
+                if self.interrupted or self._check_stop_signal():
+                    self._handle_interruption(train_metrics, val_metrics)
+                
+                # Update scheduler
+                if self.scheduler is not None:
+                    if isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                        self.scheduler.step(val_metrics['val_loss'])
+                    else:
+                        self.scheduler.step()
+                
+                # Log epoch metrics
+                self._log_epoch_metrics(train_metrics, val_metrics)
+                
+                # Checkpointing
+                is_best = val_metrics['val_loss'] < self.best_val_loss
+                if is_best:
+                    self.best_val_loss = val_metrics['val_loss']
+                
+                if self.checkpoint_manager.should_save_checkpoint(
+                    epoch, val_metrics['val_loss']
+                ):
+                    self._save_checkpoint(train_metrics, val_metrics, is_best)
+            
+            # Training completed normally
+            print("Training completed successfully!")
+            
+            # Save final checkpoint
+            self._save_checkpoint(train_metrics, val_metrics, is_best)
+            
+            # Update experiment status
+            if self.experiment:
+                self.experiment.update_status("completed")
+            
+            # Close writer
+            if self.writer is not None:
+                self.writer.close()
+            
+            # Restore signal handlers
+            self._restore_signal_handlers()
+            
+        except KeyboardInterrupt:
+            # Handle keyboard interrupt gracefully
+            self._handle_interruption(self.train_metrics, self.val_metrics)
+        except Exception as e:
+            # Handle other exceptions
+            print(f"\nTraining failed with error: {e}")
+            
+            # Update experiment status
+            if self.experiment:
+                self.experiment.update_status("failed")
+            
+            # Close writer
+            if self.writer is not None:
+                self.writer.close()
+            
+            # Restore signal handlers
+            self._restore_signal_handlers()
+            
+            raise e
     
     def _move_batch_to_device(self, batch: Dict[str, Any]) -> Dict[str, Any]:
         """Move batch to device."""
@@ -241,6 +342,26 @@ class BaseTrainer:
     def _get_model_config(self) -> Dict[str, Any]:
         """Get model configuration. To be implemented by subclasses."""
         raise NotImplementedError("Subclasses must implement _get_model_config")
+    
+    def _get_loss_config(self) -> Dict[str, Any]:
+        """Extract loss configuration from the loss function."""
+        loss_config = {}
+        
+        # Extract common loss function attributes
+        if hasattr(self.loss_fn, 'reconstruction_type'):
+            loss_config['reconstruction_type'] = self.loss_fn.reconstruction_type
+        if hasattr(self.loss_fn, 'reconstruction_weight'):
+            loss_config['reconstruction_weight'] = self.loss_fn.reconstruction_weight
+        if hasattr(self.loss_fn, 'kl_weight'):
+            loss_config['kl_weight'] = self.loss_fn.kl_weight
+        if hasattr(self.loss_fn, 'mask_threshold'):
+            loss_config['mask_threshold'] = self.loss_fn.mask_threshold
+        if hasattr(self.loss_fn, 'bg_weight'):
+            loss_config['bg_weight'] = self.loss_fn.bg_weight
+        if hasattr(self.loss_fn, 'edge_weight'):
+            loss_config['edge_weight'] = self.loss_fn.edge_weight
+        
+        return loss_config
     
     def _log_metrics(self, metrics: Dict[str, float], prefix: str, step: int):
         """Log metrics to tensorboard."""
@@ -311,10 +432,14 @@ class BaseTrainer:
         # Get model configuration from the model itself
         model_config = self._get_model_config()
         
+        # Get loss configuration from the loss function
+        loss_config = self._get_loss_config()
+        
         config_dict = {
             'training': self.training_config.dict(),
             'logging': self.logging_config.dict(),
-            'model': model_config
+            'model': model_config,
+            'loss': loss_config
         }
         
         metrics = {**train_metrics, **val_metrics}
