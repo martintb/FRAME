@@ -21,7 +21,7 @@ latent_channels = 8  # Small latent space dimension
 base_channels = 8  # Base number of channels (doubles each level) - REDUCED for memory
 levels = 3  # Number of downsampling levels (128³ → 16³ latent)
 norm_groups = 8  # Number of groups for GroupNorm
-skip_dropout_prob = 0.1  # Probability of dropping skip connections during training (trains no-skip path for DDPM)
+skip_dropout_prob = 0.8  # Probability of dropping skip connections during training (trains no-skip path for DDPM)
 
 [training]
 device = "mps"  # "cuda", "mps", or "cpu"

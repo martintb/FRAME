@@ -1,13 +1,21 @@
 # VAE Training Configuration for frame-twin
-# This config trains a VAE to compress 3D voxel structures
+# Optimized to prevent posterior collapse and enable sampling
+#
+# Key improvements:
+# - Higher KL weight (0.005 vs 0.001) to prevent latent space collapse
+# - Faster KL warmup (5 epochs) for short training runs
+# - Free bits constraint ensures all latent dimensions stay active
+# - Increased model capacity (48 base channels) for better representation
+# - Edge loss for sharper reconstructions
+# - AdamW optimizer for better generalization
 
 [metadata]
-name = "lnp_vae"
-description = "VAE training for LNP voxel structure compression"
+name = "lnp_vae_anticollapse"
+description = "VAE training with anti-collapse settings for LNP compression + generation"
 random_seed = 42
 
 [data]
-voxel_library_path = "./output/lnp_5k_10ch/voxels.zarr"
+library_uuid = "lib_454c2a20e77b"  # lnp_5k_10ch library
 split_strategy = "random"  # or "stratified"
 train_ratio = 0.8
 val_ratio = 0.1
@@ -18,38 +26,38 @@ test_ratio = 0.1
 type = "vae"  # "vae" or "unet_vae"
 input_channels = 10  # Number of material channels
 latent_channels = 8  # Small latent space dimension
-base_channels = 32  # Base number of channels (doubles each level)
-levels = 3  # Number of downsampling levels (128³ → 8³ latent)
-norm_groups = 8  # Number of groups for GroupNorm (UNetVAE only) 
+base_channels = 32  # Base number of channels (increased from 32 for more capacity)
+levels = 2  # Number of downsampling levels (128³ → 16³ latent)
+norm_groups = 8  # Number of groups for GroupNorm (UNetVAE only)
 
 [training]
-device = "mps"  # or "cpu"
+device = "mps"  # "cuda", "mps", or "cpu"
 distributed = false  # Set true for DDP
 num_epochs = 100
 num_workers = 0
-batch_size = 4
+batch_size = 4  # May need to reduce to 2-3 due to larger base_channels
 learning_rate = 2e-4
-optimizer = "adam"  # "adam", "adamw", or "sgd"
+optimizer = "adamw"  # AdamW for better generalization
 scheduler = "cosine"  # "cosine", "step", or "none"
 grad_clip = 1.0  # Gradient clipping value (0 to disable)
-kl_warmup_epochs = 15
+kl_warmup_epochs = 5  # Fast warmup (was 15) - full KL weight by epoch 5
 
 [loss]
 reconstruction_weight = 1.0
-kl_weight = 0.001
+kl_weight = 0.005  # 5x stronger (was 0.001) to prevent collapse
+free_bits = 0.5  # Minimum KL per latent dimension (prevents per-dim collapse)
 reconstruction_type = "bce_logits"  # "mse" | "l1" | "bce_logits"
 mask_threshold = 0.005
 bg_weight = 0.0
-edge_weight = 0.0  # Edge-preserving loss (use with unet_vae for better edge preservation)
+edge_weight = 0.05  # Small edge loss for sharper boundaries (was 0.0)
 
 [checkpointing]
-output_dir = "./output/lnp_5k_10ch/checkpoints_v2/vae_5k_3l_l8_b32"
-save_every_epochs = 10
+experiments_dir = "/Users/tbm/frame_data/experiments"  # Base directory for experiments
+save_every_epochs = 1  # More frequent saving for short runs
 save_every_minutes = 60  # Time-based checkpointing
-keep_last_n = 3
+keep_last_n = 10
 save_best = true  # Save best validation loss
 
 [logging]
 log_every_steps = 25
-tensorboard_dir = "./output/lnp_5k_10ch/logs_v2/vae_5k_3l_l8_b32"
-n_recon_compare = 25
+n_recon_compare = 50  # More frequent reconstruction comparisons

@@ -275,6 +275,7 @@ def main():
         
         # Create and load model (returns use_sigmoid flag from loss config)
         model, use_sigmoid = create_model_from_checkpoint(experiment, checkpoint_data, device)
+        use_sigmoid = True
         
         # Generate structure (sigmoid applied internally based on loss config)
         voxel_grid = generate_random_structure(model, device, use_sigmoid, channels_to_show)

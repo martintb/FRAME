@@ -110,11 +110,12 @@ class LossConfig(BaseModel):
     # VAE loss parameters
     reconstruction_weight: Optional[float] = Field(None, gt=0.0)
     kl_weight: Optional[float] = Field(None, gt=0.0)
+    free_bits: Optional[float] = Field(None, ge=0.0, description="Minimum KL divergence per latent dimension (prevents posterior collapse)")
     reconstruction_type: Optional[Literal["mse", "l1", "bce_logits"]] = None
     mask_threshold: Optional[float] = Field(None, ge=0.0)
     bg_weight: Optional[float] = Field(None, ge=0.0)
     edge_weight: Optional[float] = Field(None, ge=0.0)  # Edge-preserving loss weight
-    
+
     # DDPM loss parameters
     loss_type: Optional[Literal["mse", "mae"]] = None
 

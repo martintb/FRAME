@@ -7,8 +7,22 @@ from typing import Tuple
 
 
 class VAELoss(nn.Module):
-    """VAE loss combining reconstruction and KL divergence with optional background penalty and edge loss."""
-    
+    """VAE loss combining reconstruction and KL divergence with optional background penalty and edge loss.
+
+    Includes "free bits" constraint to prevent posterior collapse by ensuring each latent
+    dimension contributes a minimum amount of information.
+
+    Args:
+        reconstruction_weight: Weight for reconstruction loss
+        kl_weight: Weight for KL divergence loss
+        reconstruction_type: Type of reconstruction loss ("mse", "l1", or "bce_logits")
+        mask_threshold: Threshold for background mask
+        bg_weight: Weight for background penalty
+        edge_weight: Weight for edge-preserving loss
+        free_bits: Minimum KL divergence per latent dimension (prevents collapse).
+                   If None, standard KL loss is used. Typical values: 0.5-2.0
+    """
+
     def __init__(
         self,
         reconstruction_weight: float = 1.0,
@@ -16,17 +30,19 @@ class VAELoss(nn.Module):
         reconstruction_type: str = "mse",
         mask_threshold: float = 0.005,
         bg_weight: float = 0.5,
-        edge_weight: float = 0.0
+        edge_weight: float = 0.0,
+        free_bits: float = None
     ):
         super().__init__()
-        
+
         self.reconstruction_weight = reconstruction_weight
         self.kl_weight = kl_weight
         self.reconstruction_type = reconstruction_type
         self.mask_threshold = mask_threshold
         self.bg_weight = bg_weight
         self.edge_weight = edge_weight
-        
+        self.free_bits = free_bits
+
         # Create 3D Sobel filters for gradient computation (if edge loss is enabled)
         if self.edge_weight > 0:
             self._create_sobel_filters()
@@ -153,15 +169,28 @@ class VAELoss(nn.Module):
         if self.edge_weight > 0.0:
             edge_loss_val = self._edge_loss(x_recon, x)
             recon_loss = recon_loss + self.edge_weight * edge_loss_val
-        
-        # KL divergence loss - use mean reduction like legacy implementation
-        kl_loss = -0.5 * torch.mean(1 + logvar - mean.pow(2) - logvar.exp())
-        
+
+        # KL divergence loss with optional free bits constraint
+        if self.free_bits is not None and self.free_bits > 0:
+            # Free bits: ensure each latent dimension contributes at least free_bits nats
+            # This prevents individual dimensions from collapsing to zero
+            # KL per dimension: -0.5 * (1 + logvar - mean^2 - exp(logvar))
+            kl_per_dim = -0.5 * (1 + logvar - mean.pow(2) - logvar.exp())
+
+            # Clamp each dimension's KL to be at least free_bits
+            # Shape: (B, C, D, H, W) -> sum over spatial dims, clamp, then mean over batch and channels
+            kl_per_dim_spatial = kl_per_dim.sum(dim=(2, 3, 4))  # (B, C)
+            kl_clamped = torch.clamp(kl_per_dim_spatial, min=self.free_bits)
+            kl_loss = kl_clamped.mean()
+        else:
+            # Standard KL loss - mean reduction
+            kl_loss = -0.5 * torch.mean(1 + logvar - mean.pow(2) - logvar.exp())
+
         # Total loss
         total_loss = (
             self.reconstruction_weight * recon_loss +
             self.kl_weight * kl_loss
         )
-        
+
         # Return detailed components for logging
         return total_loss, recon_loss, kl_loss, data_recon.detach(), bg_penalty.detach(), edge_loss_val.detach()

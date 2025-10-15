@@ -92,65 +92,79 @@ class BaseTrainer:
     
     def _handle_interruption(self, train_metrics: Dict[str, float], val_metrics: Dict[str, float]):
         """Handle training interruption gracefully."""
-        print("\nTraining interrupted. Saving checkpoint and updating experiment status...")
-        
-        # Save final checkpoint
-        is_best = val_metrics['val_loss'] < self.best_val_loss if val_metrics else False
-        self._save_checkpoint(train_metrics, val_metrics, is_best)
-        
-        # Update experiment status
+        print("\nTraining interrupted. Immediately stopping, updating metadata, and saving checkpoint...")
+
+        # Update experiment status first
         if self.experiment:
             self.experiment.update_status("interrupted")
-        
-        # Close writer
+            print(f"Updated experiment {self.experiment.uuid} status to 'interrupted'")
+
+        # Save final checkpoint with current state
+        is_best = val_metrics.get('val_loss', float('inf')) < self.best_val_loss if val_metrics else False
+        self._save_checkpoint(train_metrics, val_metrics, is_best)
+        print(f"Saved checkpoint at epoch {self.current_epoch}, step {self.global_step}")
+
+        # Close TensorBoard writer
         if self.writer is not None:
             self.writer.close()
-        
+            print("Closed TensorBoard writer")
+
         # Restore signal handlers
         self._restore_signal_handlers()
-        
-        print("Training stopped gracefully. Checkpoint saved.")
+
+        print("\nTraining stopped gracefully.")
+        print(f"  - Final epoch: {self.current_epoch}")
+        print(f"  - Final step: {self.global_step}")
+        print(f"  - Checkpoint saved")
+        print(f"  - Experiment metadata updated")
         sys.exit(0)
     
     def train_epoch(self) -> Dict[str, float]:
         """Train for one epoch."""
         self.model.train()
-        
+
         epoch_metrics = {
             'train_loss': 0.0,
             'num_batches': 0
         }
-        
+
         progress_bar = tqdm(
             self.train_loader,
             desc=f"Epoch {self.current_epoch}",
             leave=False
         )
-        
+
         for batch_idx, batch in enumerate(progress_bar):
+            # Check for interruption at the start of each batch
+            if self.interrupted or self._check_stop_signal():
+                # Average metrics computed so far
+                if epoch_metrics['num_batches'] > 0:
+                    epoch_metrics['train_loss'] /= epoch_metrics['num_batches']
+                return epoch_metrics
+
             # Move batch to device
             batch = self._move_batch_to_device(batch)
-            
+
             # Forward pass
             self.optimizer.zero_grad()
             loss, metrics = self._compute_loss(batch)
-            
+
             # Backward pass
             loss.backward()
-            
+
             # Gradient clipping
             if self.training_config.grad_clip is not None and self.training_config.grad_clip > 0:
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.training_config.grad_clip)
-            
+
             self.optimizer.step()
-            
+
             # Update metrics
             epoch_metrics['train_loss'] += loss.item()
             epoch_metrics['num_batches'] += 1
-            
+
             # Update global step
             self.global_step += 1
-            
+
             # Logging
             if self.global_step % self.logging_config.log_every_steps == 0:
                 self._log_metrics(metrics, prefix='train', step=self.global_step)
@@ -164,46 +178,53 @@ class BaseTrainer:
                     except Exception:
                         # Avoid crashing training due to visualization
                         pass
-            
+
             # Update progress bar
             progress_bar.set_postfix({
                 'loss': f"{loss.item():.4f}",
                 'lr': f"{self.optimizer.param_groups[0]['lr']:.2e}"
             })
-            
+
             # Explicitly free memory to prevent accumulation
             del loss, batch
             if self.device.type == 'mps':
                 torch.mps.empty_cache()
             elif self.device.type == 'cuda':
                 torch.cuda.empty_cache()
-        
+
         # Average metrics
         epoch_metrics['train_loss'] /= epoch_metrics['num_batches']
-        
+
         return epoch_metrics
     
     def validate_epoch(self) -> Dict[str, float]:
         """Validate for one epoch."""
         self.model.eval()
-        
+
         epoch_metrics = {
             'val_loss': 0.0,
             'num_batches': 0
         }
-        
+
         with torch.no_grad():
             for batch in tqdm(self.val_loader, desc="Validation", leave=False):
+                # Check for interruption at the start of each batch
+                if self.interrupted or self._check_stop_signal():
+                    # Average metrics computed so far
+                    if epoch_metrics['num_batches'] > 0:
+                        epoch_metrics['val_loss'] /= epoch_metrics['num_batches']
+                    return epoch_metrics
+
                 # Move batch to device
                 batch = self._move_batch_to_device(batch)
-                
+
                 # Forward pass
                 loss, metrics = self._compute_loss(batch)
-                
+
                 # Update metrics
                 epoch_metrics['val_loss'] += loss.item()
                 epoch_metrics['num_batches'] += 1
-                
+
                 # Periodic reconstruction comparison images (step-based)
                 if getattr(self.logging_config, 'n_recon_compare', 0):
                     n_rc = self.logging_config.n_recon_compare or 0
@@ -213,17 +234,17 @@ class BaseTrainer:
                         except Exception:
                             # Avoid crashing training due to visualization
                             pass
-                
+
                 # Explicitly free memory
                 del loss, batch
                 if self.device.type == 'mps':
                     torch.mps.empty_cache()
                 elif self.device.type == 'cuda':
                     torch.cuda.empty_cache()
-        
+
         # Average metrics
         epoch_metrics['val_loss'] /= epoch_metrics['num_batches']
-        
+
         return epoch_metrics
     
     def train(self, start_epoch: int = 0) -> None:

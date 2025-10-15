@@ -43,7 +43,8 @@ class VAETrainer(BaseTrainer):
             reconstruction_type=getattr(config.loss, 'reconstruction_type', 'mse') or 'mse',
             mask_threshold=getattr(config.loss, 'mask_threshold', 0.005) or 0.005,
             bg_weight=getattr(config.loss, 'bg_weight', 0.5) or 0.5,
-            edge_weight=getattr(config.loss, 'edge_weight', 0.0) or 0.0
+            edge_weight=getattr(config.loss, 'edge_weight', 0.0) or 0.0,
+            free_bits=getattr(config.loss, 'free_bits', None)
         )
         
         # Create optimizer
