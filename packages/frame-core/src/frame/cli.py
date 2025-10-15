@@ -98,9 +98,11 @@ def setup_checkpoint_commands(subparsers):
 
 def setup_tensorboard_command(subparsers):
     """Set up tensorboard launcher."""
-    tb_parser = subparsers.add_parser("tensorboard", help="Launch TensorBoard for experiment")
-    tb_parser.add_argument("experiment_uuid", help="Experiment UUID")
-    tb_parser.add_argument("--port", type=int, default=6006, help="TensorBoard port")
+    tb_parser = subparsers.add_parser("tensorboard", help="Launch TensorBoard for experiment(s)")
+    tb_parser.add_argument("experiment_uuid", nargs="?", default=None, help="Experiment UUID (optional, defaults to last running)")
+    tb_parser.add_argument("--port", type=int, default=6006, help="TensorBoard port (default: 6006)")
+    tb_parser.add_argument("--bind-all", action="store_true", help="Bind to all network interfaces (0.0.0.0)")
+    tb_parser.add_argument("--all", action="store_true", help="Show all experiments (root experiments directory)")
 
 
 def setup_migrate_commands(subparsers):
@@ -325,33 +327,95 @@ def handle_checkpoint_commands(args):
 def handle_tensorboard_command(args):
     """Handle tensorboard launcher."""
     import subprocess
-    
+    from .config import get_config
+
+    config = get_config()
     exp_mgr = ExperimentManager()
-    experiment = exp_mgr.get_experiment(args.experiment_uuid)
-    
-    if not experiment:
-        print(f"Experiment {args.experiment_uuid} not found")
-        sys.exit(1)
-    
-    log_dir = experiment.path / "logs" / "tensorboard"
-    
-    if not log_dir.exists():
-        print(f"No tensorboard logs found for experiment {experiment.name}")
-        sys.exit(1)
-    
-    print(f"Starting TensorBoard for experiment {experiment.name}")
+
+    # Determine log directory based on arguments
+    if args.all:
+        # Show all experiments
+        log_dir = config.experiments_path
+        description = "all experiments"
+
+        if not log_dir.exists():
+            print(f"Experiments directory not found: {log_dir}")
+            sys.exit(1)
+
+    elif args.experiment_uuid:
+        # Specific experiment provided
+        experiment = exp_mgr.get_experiment(args.experiment_uuid)
+
+        if not experiment:
+            print(f"Experiment {args.experiment_uuid} not found")
+            sys.exit(1)
+
+        log_dir = experiment.path / "logs" / "tensorboard"
+        description = f"experiment {experiment.name}"
+
+        if not log_dir.exists():
+            print(f"No tensorboard logs found for experiment {experiment.name}")
+            sys.exit(1)
+
+    else:
+        # No experiment specified - find last running experiment
+        experiments = exp_mgr.list_experiments()
+
+        # Filter to experiments with status "running" or recently completed
+        running_experiments = [exp for exp in experiments if exp.status == "running"]
+
+        if not running_experiments:
+            # Fall back to most recently created experiment
+            if not experiments:
+                print("No experiments found. Please specify an experiment UUID or use --all")
+                sys.exit(1)
+
+            # Sort by creation time (most recent first)
+            experiments.sort(key=lambda e: e.created, reverse=True)
+            experiment = experiments[0]
+            print(f"No running experiments found. Using most recent: {experiment.name}")
+        else:
+            # Use the most recently started running experiment
+            running_experiments.sort(key=lambda e: e.created, reverse=True)
+            experiment = running_experiments[0]
+            print(f"Using last running experiment: {experiment.name}")
+
+        log_dir = experiment.path / "logs" / "tensorboard"
+        description = f"experiment {experiment.name}"
+
+        if not log_dir.exists():
+            print(f"No tensorboard logs found for {description}")
+            print(f"Try specifying a different experiment or use --all")
+            sys.exit(1)
+
+    # Build tensorboard command
+    tb_cmd = [
+        "tensorboard",
+        "--logdir", str(log_dir),
+        "--port", str(args.port),
+    ]
+
+    if args.bind_all:
+        tb_cmd.extend(["--bind_all"])
+
+    # Display info
+    print(f"Starting TensorBoard for {description}")
     print(f"Log directory: {log_dir}")
     print(f"Port: {args.port}")
+
+    if args.bind_all:
+        print(f"Binding: 0.0.0.0 (all network interfaces)")
+        print()
+        print(f"Open http://0.0.0.0:{args.port} or http://<your-ip>:{args.port} in your browser")
+    else:
+        print(f"Binding: localhost only")
+        print()
+        print(f"Open http://localhost:{args.port} in your browser")
+
     print()
-    print(f"Open http://localhost:{args.port} in your browser")
-    print()
-    
+
     try:
-        subprocess.run([
-            "tensorboard",
-            "--logdir", str(log_dir),
-            "--port", str(args.port),
-        ])
+        subprocess.run(tb_cmd)
     except KeyboardInterrupt:
         print("\nTensorBoard stopped")
 
