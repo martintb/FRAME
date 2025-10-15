@@ -41,6 +41,8 @@ frame/
 └── pyproject.toml          # Workspace configuration
 ```
 
+**IMPORTANT**: `frame-voxel` was deprecated as of commit 8634814. All voxel functionality has been fully integrated into `frame-core`. Always import from `frame.*` instead of `frame_voxel.*`.
+
 ---
 
 ## Package Responsibilities
@@ -77,12 +79,13 @@ frame/
 
 - **Unified CLI**:
   - ✅ `uv run frame` - Central command integrating all packages
-  - ✅ Library management commands (list, show, search, tag)
-  - ✅ Experiment management commands (list, show, tag)
-  - ✅ Checkpoint management (list, show, set-best)
+  - ✅ Library management: `list`, `show`, `search`, `tag`, `untag`
+  - ✅ Experiment management: `list`, `show`, `tag`, `untag`, `stop`
+  - ✅ Checkpoint management: `list`, `show`, `set-best`
+  - ✅ Visualization: `view` - Interactive napari visualization
   - ✅ TensorBoard launcher
   - ✅ Migration tools for legacy data
-  - ✅ Integrates frame-geo and frame-twin commands
+  - ✅ Integrates frame-geo and frame-twin subcommands
 
 - **Migration Tools**:
   - ✅ Automatic migration of old data structures
@@ -140,7 +143,7 @@ frame/
   - Time-based and epoch-based checkpointing
   - TensorBoard logging and metric tracking
 - **Data Handling**:
-  - Integration with `frame-voxel.VoxelLibrary`
+  - Integration with `frame.VoxelLibrary` (formerly frame-voxel)
   - Random and stratified data splitting
   - Custom collate functions for (voxels, parameters) pairs
   - Distributed data loading for DDP
@@ -187,6 +190,27 @@ frame/
 - Document units explicitly
 - Validate generated structures
 - Ensure reproducibility (random seeds, version pinning)
+
+### 5. Experiment Tracking
+**All computational experiments MUST be tracked with `ExperimentManager`.**
+
+- **frame-twin**: ✅ Fully integrated
+  - Training runs automatically create experiments
+  - Checkpoints are versioned and linked to experiments
+  - Resuming training creates derived experiments with lineage
+
+- **frame-geo**: ⚠️ **Partially integrated** (LibraryManager only)
+  - Libraries are registered and tracked
+  - **TODO**: Generation runs should create experiments
+  - Configuration, parameters, and validation stats should be tracked
+  - Enable reproducibility and lineage from libraries to generation configs
+
+**Best practices**:
+- Always use `ExperimentManager.create_experiment()` for new runs
+- Link experiments to their input libraries via `library_uuid`
+- Track dependencies (e.g., VAE experiment for DDPM training)
+- Use tags for organization (e.g., "preliminary", "production", "failed")
+- Never manually edit experiment metadata files
 
 ---
 
