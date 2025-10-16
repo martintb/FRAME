@@ -3,29 +3,31 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List
 
 
 class Encoder3D(nn.Module):
     """3D VAE Encoder using simple convolutional architecture."""
-    
-    def __init__(self, in_channels: int, latent_channels: int, base_channels: int, levels: int):
+
+    def __init__(self, in_channels: int, latent_channels: int, channel_schedule: List[int]):
         super().__init__()
-        ch = base_channels
-        self.in_conv = nn.Conv3d(in_channels, ch, kernel_size=3, padding=1)
+        self.channel_schedule = channel_schedule
+        self.in_conv = nn.Conv3d(in_channels, channel_schedule[0], kernel_size=3, padding=1)
         blocks = []
-        for _ in range(levels):
+        for i in range(len(channel_schedule)):
+            ch_in = channel_schedule[i]
+            ch_out = channel_schedule[i + 1] if i + 1 < len(channel_schedule) else ch_in
             blocks.extend(
                 [
-                    nn.GroupNorm(8, ch),
+                    nn.GroupNorm(8, ch_in),
                     nn.SiLU(),
-                    nn.Conv3d(ch, ch * 2, kernel_size=3, stride=2, padding=1),
+                    nn.Conv3d(ch_in, ch_out, kernel_size=3, stride=2, padding=1),
                 ]
             )
-            ch *= 2
         self.down = nn.Sequential(*blocks)
-        self.mu = nn.Conv3d(ch, latent_channels, kernel_size=1)
-        self.logvar = nn.Conv3d(ch, latent_channels, kernel_size=1)
+        final_channels = channel_schedule[-1]
+        self.mu = nn.Conv3d(final_channels, latent_channels, kernel_size=1)
+        self.logvar = nn.Conv3d(final_channels, latent_channels, kernel_size=1)
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         h = self.in_conv(x)
@@ -40,24 +42,28 @@ class Encoder3D(nn.Module):
 
 class Decoder3D(nn.Module):
     """3D VAE Decoder using simple convolutional architecture."""
-    
-    def __init__(self, out_channels: int, latent_channels: int, base_channels: int, levels: int):
+
+    def __init__(self, out_channels: int, latent_channels: int, channel_schedule: List[int]):
         super().__init__()
-        ch = base_channels * (2**levels)
-        self.in_conv = nn.Conv3d(latent_channels, ch, kernel_size=1)
+        self.channel_schedule = channel_schedule
+        # Reverse the channel schedule for decoder
+        reversed_schedule = list(reversed(channel_schedule))
+
+        self.in_conv = nn.Conv3d(latent_channels, reversed_schedule[0], kernel_size=1)
         blocks = []
-        for _ in range(levels):
+        for i in range(len(reversed_schedule)):
+            ch_in = reversed_schedule[i]
+            ch_out = reversed_schedule[i + 1] if i + 1 < len(reversed_schedule) else ch_in
             blocks.extend(
                 [
-                    nn.GroupNorm(8, ch),
+                    nn.GroupNorm(8, ch_in),
                     nn.SiLU(),
                     nn.Upsample(scale_factor=2, mode='trilinear', align_corners=False),
-                    nn.Conv3d(ch, ch // 2, kernel_size=3, padding=1),
+                    nn.Conv3d(ch_in, ch_out, kernel_size=3, padding=1),
                 ]
             )
-            ch //= 2
         self.up = nn.Sequential(*blocks)
-        self.out_conv = nn.Conv3d(ch, out_channels, kernel_size=3, padding=1)
+        self.out_conv = nn.Conv3d(channel_schedule[0], out_channels, kernel_size=3, padding=1)
 
     def forward(self, z: torch.Tensor) -> torch.Tensor:
         h = self.in_conv(z)
@@ -68,26 +74,43 @@ class Decoder3D(nn.Module):
 
 class VAE(nn.Module):
     """3D Variational Autoencoder using simple convolutional architecture."""
-    
+
     def __init__(
         self,
         input_channels: int,
         latent_channels: int,
-        base_channels: int,
-        levels: int
+        channel_schedule: Optional[List[int]] = None,
+        base_channels: Optional[int] = None,  # Deprecated, for backward compatibility
+        levels: Optional[int] = None  # Deprecated, for backward compatibility
     ):
         super().__init__()
-        
+
         self.input_channels = input_channels
         self.latent_channels = latent_channels
-        self.base_channels = base_channels
-        self.levels = levels
-        
-        self.encoder = Encoder3D(input_channels, latent_channels, base_channels, levels)
-        self.decoder = Decoder3D(input_channels, latent_channels, base_channels, levels)
+
+        # Support backward compatibility with base_channels and levels
+        if channel_schedule is None:
+            if base_channels is None or levels is None:
+                raise ValueError("Must provide either channel_schedule or both base_channels and levels")
+            channel_schedule = [base_channels * (2 ** i) for i in range(levels)]
+
+        self.channel_schedule = channel_schedule
+        self.base_channels = channel_schedule[0]  # For compatibility
+        self.levels = len(channel_schedule)  # For compatibility
+
+        # Track latent spatial size (inferred from first forward pass)
+        self.latent_spatial_size: Optional[int] = None
+
+        self.encoder = Encoder3D(input_channels, latent_channels, channel_schedule)
+        self.decoder = Decoder3D(input_channels, latent_channels, channel_schedule)
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         z, mu, logvar = self.encoder(x)
+
+        # Cache latent spatial size from first forward pass
+        if self.latent_spatial_size is None:
+            self.latent_spatial_size = z.shape[2]  # Assuming cubic spatial dimensions
+
         x_recon = self.decoder(z)
         return x_recon, z, mu, logvar
     
@@ -100,10 +123,27 @@ class VAE(nn.Module):
         """Decode latent to output space."""
         return self.decoder(z)
     
-    def sample(self, num_samples: int, device: torch.device) -> torch.Tensor:
-        """Sample from the latent space."""
-        # Calculate latent spatial size after encoding
-        latent_size = 128 // (2 ** self.levels)  # Assuming 128x128x128 input
+    def sample(self, num_samples: int, device: torch.device, latent_size: Optional[int] = None) -> torch.Tensor:
+        """Sample from the latent space.
+
+        Args:
+            num_samples: Number of samples to generate
+            device: Device to generate samples on
+            latent_size: Optional latent spatial size. If None, uses cached size from forward pass,
+                        or falls back to 128 // (2 ** levels) if not yet cached.
+
+        Returns:
+            Generated samples
+        """
+        # Determine latent spatial size
+        if latent_size is None:
+            if self.latent_spatial_size is not None:
+                # Use cached size from forward pass
+                latent_size = self.latent_spatial_size
+            else:
+                # Fallback to computation (assumes 128^3 input)
+                latent_size = 128 // (2 ** self.levels)
+
         z = torch.randn(
             num_samples, self.latent_channels, latent_size, latent_size, latent_size, device=device
         )

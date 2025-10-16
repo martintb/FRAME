@@ -6,6 +6,57 @@ import torch.nn.functional as F
 from typing import Tuple
 
 
+def simplex_renorm(p: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+    """Ensure targets are valid simplex fractions per voxel.
+
+    Args:
+        p: Input tensor with fractional channel values
+        eps: Small value to prevent division by zero
+
+    Returns:
+        Normalized tensor where channel values sum to 1 per voxel
+    """
+    p = torch.clamp(p, min=eps)
+    return p / torch.clamp(p.sum(dim=1, keepdim=True), min=eps)
+
+
+def recon_loss_fractional(
+    logits: torch.Tensor,
+    p: torch.Tensor,
+    label_smoothing: float = 0.0,
+    eps: float = 1e-8
+) -> torch.Tensor:
+    """Fractional (soft) cross-entropy loss with soft labels.
+
+    This is a cross-entropy loss that works with fractional, non-one-hot channel values.
+    Each voxel has fractional occupancy across channels (sums to 1 on the simplex).
+
+    Args:
+        logits: Model output logits (B, C, D, H, W)
+        p: Target fractional channel values (B, C, D, H, W), sum over C == 1 per voxel
+        label_smoothing: Optional label smoothing factor (0.0 = no smoothing)
+        eps: Small value for numerical stability
+
+    Returns:
+        Scalar loss value
+    """
+    # Ensure targets are on the simplex
+    p = simplex_renorm(p, eps=eps)
+
+    # Apply label smoothing if requested
+    if label_smoothing > 0.0:
+        C = logits.size(1)
+        u = 1.0 / C
+        p = (1 - label_smoothing) * p + label_smoothing * u
+        p = simplex_renorm(p, eps=eps)
+
+    # Stable log-softmax and cross-entropy
+    log_q = F.log_softmax(logits, dim=1)
+    nll = -(p * log_q).sum(dim=1)  # Sum over channels, NLL per voxel
+
+    return nll.mean()  # Mean over voxels and batch
+
+
 class VAELoss(nn.Module):
     """VAE loss combining reconstruction and KL divergence with optional background penalty and edge loss.
 
@@ -31,7 +82,8 @@ class VAELoss(nn.Module):
         mask_threshold: float = 0.005,
         bg_weight: float = 0.5,
         edge_weight: float = 0.0,
-        free_bits: float = None
+        free_bits: float = None,
+        label_smoothing: float = 0.0
     ):
         super().__init__()
 
@@ -42,6 +94,7 @@ class VAELoss(nn.Module):
         self.bg_weight = bg_weight
         self.edge_weight = edge_weight
         self.free_bits = free_bits
+        self.label_smoothing = label_smoothing
 
         # Create 3D Sobel filters for gradient computation (if edge loss is enabled)
         if self.edge_weight > 0:
@@ -123,6 +176,8 @@ class VAELoss(nn.Module):
             return F.l1_loss(x_recon, x)
         elif self.reconstruction_type == "bce_logits":
             return F.binary_cross_entropy_with_logits(x_recon, x)
+        elif self.reconstruction_type == "fractional_ce":
+            return recon_loss_fractional(x_recon, x, label_smoothing=self.label_smoothing)
         else:
             raise ValueError(f"Unknown reconstruction type: {self.reconstruction_type}")
     
@@ -135,13 +190,13 @@ class VAELoss(nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Compute VAE loss.
-        
+
         Args:
             x_recon: Reconstructed input
             x: Original input
             mean: Latent mean
             logvar: Latent log variance
-            
+
         Returns:
             total_loss: Combined loss
             recon_loss: Reconstruction loss
@@ -150,12 +205,13 @@ class VAELoss(nn.Module):
             bg_penalty: Background penalty (for logging)
             edge_loss_val: Edge loss (for logging)
         """
-        # Reconstruction loss
+        # Reconstruction loss (always compute for logging, even if weight is zero)
         data_recon = self._recon_loss(x_recon, x)
         bg_penalty = torch.tensor(0.0, device=x_recon.device)
         edge_loss_val = torch.tensor(0.0, device=x_recon.device)
 
         # Background penalty: encourage near-zero predictions where input is empty
+        # Only compute if weight > 0
         if self.bg_weight > 0.0:
             with torch.no_grad():
                 mask = (x.sum(dim=1, keepdim=True) > self.mask_threshold).float()
@@ -164,8 +220,9 @@ class VAELoss(nn.Module):
             recon_loss = data_recon + self.bg_weight * bg_penalty
         else:
             recon_loss = data_recon
-        
+
         # Edge loss: encourage sharp boundaries
+        # Only compute if weight > 0
         if self.edge_weight > 0.0:
             edge_loss_val = self._edge_loss(x_recon, x)
             recon_loss = recon_loss + self.edge_weight * edge_loss_val
@@ -186,11 +243,12 @@ class VAELoss(nn.Module):
             # Standard KL loss - mean reduction
             kl_loss = -0.5 * torch.mean(1 + logvar - mean.pow(2) - logvar.exp())
 
-        # Total loss
-        total_loss = (
-            self.reconstruction_weight * recon_loss +
-            self.kl_weight * kl_loss
-        )
+        # Total loss - only include terms with non-zero weights
+        total_loss = torch.tensor(0.0, device=x_recon.device)
+        if self.reconstruction_weight > 0.0:
+            total_loss = total_loss + self.reconstruction_weight * recon_loss
+        if self.kl_weight > 0.0:
+            total_loss = total_loss + self.kl_weight * kl_loss
 
         # Return detailed components for logging
         return total_loss, recon_loss, kl_loss, data_recon.detach(), bg_penalty.detach(), edge_loss_val.detach()

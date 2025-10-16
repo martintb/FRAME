@@ -21,7 +21,11 @@ class DataConfig(BaseModel):
     val_ratio: float = Field(0.1, ge=0.0, le=1.0)
     test_ratio: float = Field(0.1, ge=0.0, le=1.0)
     stratify_params: Optional[List[str]] = None
-    
+
+    # Data augmentation options
+    random_crop_size: Optional[int] = Field(None, gt=0, description="Size of random crops for training (e.g., 64 for 64^3)")
+    random_rotation: bool = Field(False, description="Apply random 90-degree rotations and flips")
+
     @validator('test_ratio')
     def validate_ratios(cls, v, values):
         """Ensure train + val + test = 1.0."""
@@ -37,17 +41,43 @@ class VAEModelConfig(BaseModel):
     type: Literal["vae", "unet_vae"] = "vae"
     input_channels: int = Field(gt=0)
     latent_channels: int = Field(gt=0)
-    base_channels: int = Field(gt=0)
-    levels: int = Field(gt=0, le=6)  # Max 6 levels to avoid too much compression
+    base_channels: Optional[int] = Field(None, gt=0)  # Deprecated in favor of channel_schedule
+    levels: Optional[int] = Field(None, gt=0, le=6)  # Deprecated in favor of channel_schedule
+    channel_schedule: Optional[List[int]] = Field(None, description="List of channel sizes at each level (e.g., [32, 64, 128, 256])")
     norm_groups: int = Field(8, gt=0)  # Number of groups for GroupNorm (UNetVAE only)
     skip_dropout_prob: float = Field(0.0, ge=0.0, le=1.0, description="Probability of dropping skip connections during training (UNetVAE only)")
-    
-    @validator('levels')
-    def validate_levels(cls, v):
-        """Ensure levels is reasonable for 128x128x128 input."""
-        if v > 6:
-            raise ValueError("levels must be <= 6 to avoid over-compression of 128x128x128 input")
-        return v
+
+    @validator('channel_schedule')
+    def validate_channel_schedule(cls, v, values):
+        """Validate channel schedule or construct from base_channels/levels."""
+        base_channels = values.get('base_channels')
+        levels = values.get('levels')
+
+        # If channel_schedule is provided, use it
+        if v is not None:
+            if len(v) < 1:
+                raise ValueError("channel_schedule must have at least 1 element")
+            if len(v) > 6:
+                raise ValueError("channel_schedule must have at most 6 elements (to avoid over-compression)")
+            return v
+
+        # Otherwise, construct from base_channels and levels (backward compatibility)
+        if base_channels is not None and levels is not None:
+            return [base_channels * (2 ** i) for i in range(levels)]
+
+        raise ValueError("Must provide either 'channel_schedule' or both 'base_channels' and 'levels'")
+
+    def get_levels(self) -> int:
+        """Get number of levels from channel_schedule."""
+        if self.channel_schedule is not None:
+            return len(self.channel_schedule)
+        return self.levels
+
+    def get_base_channels(self) -> int:
+        """Get base channels from channel_schedule."""
+        if self.channel_schedule is not None:
+            return self.channel_schedule[0]
+        return self.base_channels
 
 
 class DDPMConditioningConfig(BaseModel):
@@ -111,10 +141,11 @@ class LossConfig(BaseModel):
     reconstruction_weight: Optional[float] = Field(None, gt=0.0)
     kl_weight: Optional[float] = Field(None, gt=0.0)
     free_bits: Optional[float] = Field(None, ge=0.0, description="Minimum KL divergence per latent dimension (prevents posterior collapse)")
-    reconstruction_type: Optional[Literal["mse", "l1", "bce_logits"]] = None
+    reconstruction_type: Optional[Literal["mse", "l1", "bce_logits", "fractional_ce"]] = None
     mask_threshold: Optional[float] = Field(None, ge=0.0)
     bg_weight: Optional[float] = Field(None, ge=0.0)
     edge_weight: Optional[float] = Field(None, ge=0.0)  # Edge-preserving loss weight
+    label_smoothing: Optional[float] = Field(0.0, ge=0.0, le=1.0, description="Label smoothing for fractional_ce loss")
 
     # DDPM loss parameters
     loss_type: Optional[Literal["mse", "mae"]] = None

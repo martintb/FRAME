@@ -210,14 +210,16 @@ def train_vae(config_path: str):
     
     print("Creating data loaders...")
     pin_memory = config.training.device == "cuda"
-    
+
     loaders = create_data_loaders(
         voxel_library=voxel_library,
         data_splits=data_splits,
         batch_size=config.training.batch_size,
         device=None,
         num_workers=config.training.num_workers,
-        pin_memory=pin_memory
+        pin_memory=pin_memory,
+        random_crop_size=getattr(config.data, 'random_crop_size', None),
+        random_rotation=getattr(config.data, 'random_rotation', False)
     )
     train_loader = loaders['train']
     val_loader = loaders['val']
@@ -266,14 +268,16 @@ def train_vae_with_checkpoint(config_path: str, experiment, checkpoint_path: str
     
     print("Creating data loaders...")
     pin_memory = config.training.device == "cuda"
-    
+
     loaders = create_data_loaders(
         voxel_library=voxel_library,
         data_splits=data_splits,
         batch_size=config.training.batch_size,
         device=None,
         num_workers=config.training.num_workers,
-        pin_memory=pin_memory
+        pin_memory=pin_memory,
+        random_crop_size=getattr(config.data, 'random_crop_size', None),
+        random_rotation=getattr(config.data, 'random_rotation', False)
     )
     train_loader = loaders['train']
     val_loader = loaders['val']
@@ -346,14 +350,16 @@ def train_ddpm(config_path: str):
     
     print("Creating data loaders...")
     pin_memory = config.training.device == "cuda"
-    
+
     loaders = create_data_loaders(
         voxel_library=voxel_library,
         data_splits=data_splits,
         batch_size=config.training.batch_size,
         device=None,
         num_workers=config.training.num_workers,
-        pin_memory=pin_memory
+        pin_memory=pin_memory,
+        random_crop_size=getattr(config.data, 'random_crop_size', None),
+        random_rotation=getattr(config.data, 'random_rotation', False)
     )
     train_loader = loaders['train']
     val_loader = loaders['val']
@@ -402,14 +408,16 @@ def train_ddpm_with_checkpoint(config_path: str, experiment, checkpoint_path: st
     
     print("Creating data loaders...")
     pin_memory = config.training.device == "cuda"
-    
+
     loaders = create_data_loaders(
         voxel_library=voxel_library,
         data_splits=data_splits,
         batch_size=config.training.batch_size,
         device=None,
         num_workers=config.training.num_workers,
-        pin_memory=pin_memory
+        pin_memory=pin_memory,
+        random_crop_size=getattr(config.data, 'random_crop_size', None),
+        random_rotation=getattr(config.data, 'random_rotation', False)
     )
     train_loader = loaders['train']
     val_loader = loaders['val']

@@ -30,6 +30,14 @@ from .dataset import (
     collate_voxel_grids_with_params,
 )
 
+# Data augmentation transforms
+from .transforms import (
+    RandomCrop3D,
+    RandomRotation3D,
+    CenterCrop3D,
+    Compose,
+)
+
 # Visualization - Napari
 from .visualize_napari import (
     NapariViewer,
@@ -72,6 +80,11 @@ __all__ = [
     "CachedVoxelDataset",
     "collate_voxel_grids",
     "collate_voxel_grids_with_params",
+    # Transforms
+    "RandomCrop3D",
+    "RandomRotation3D",
+    "CenterCrop3D",
+    "Compose",
     # Visualization
     "NapariViewer",
     "PyVistaRenderer",

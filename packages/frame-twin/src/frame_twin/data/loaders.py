@@ -7,6 +7,7 @@ from pathlib import Path
 
 from frame.storage import VoxelLibrary
 from frame.dataset import VoxelDataset, collate_voxel_grids_with_params
+from frame.transforms import RandomCrop3D, RandomRotation3D, CenterCrop3D, Compose
 from .splits import DataSplit
 
 
@@ -80,35 +81,60 @@ def create_data_loaders(
     device: Optional[torch.device] = None,
     transform: Optional[Callable] = None,
     shuffle_train: bool = True,
-    pin_memory: bool = True
+    pin_memory: bool = True,
+    random_crop_size: Optional[int] = None,
+    random_rotation: bool = False
 ) -> Dict[str, DataLoader]:
     """
     Create DataLoaders for train/val/test splits.
-    
+
     Args:
         voxel_library: VoxelLibrary instance
         data_splits: DataSplit object with indices
         batch_size: Batch size for all loaders
         num_workers: Number of worker processes
         device: Device to move data to
-        transform: Optional transform function
+        transform: Optional transform function (applied first)
         shuffle_train: Whether to shuffle training data
         pin_memory: Whether to pin memory for faster GPU transfer
-        
+        random_crop_size: Optional random crop size for training augmentation
+        random_rotation: Whether to apply random rotations/flips for training
+
     Returns:
         Dict with 'train', 'val', 'test' DataLoader instances
     """
     loaders = {}
-    
+
+    # Build training transform
+    train_transforms = []
+    if transform is not None:
+        train_transforms.append(transform)
+    if random_crop_size is not None:
+        train_transforms.append(RandomCrop3D(random_crop_size))
+    if random_rotation:
+        train_transforms.append(RandomRotation3D())
+
+    train_transform = Compose(train_transforms) if train_transforms else None
+
+    # Build validation/test transform (center crop only, no rotation)
+    val_test_transforms = []
+    if transform is not None:
+        val_test_transforms.append(transform)
+    if random_crop_size is not None:
+        # Use center crop for validation/test
+        val_test_transforms.append(CenterCrop3D(random_crop_size))
+
+    val_test_transform = Compose(val_test_transforms) if val_test_transforms else None
+
     # Create datasets for each split
     train_dataset = VoxelParameterDataset(
-        voxel_library, data_splits.train_indices, transform, device
+        voxel_library, data_splits.train_indices, train_transform, device
     )
     val_dataset = VoxelParameterDataset(
-        voxel_library, data_splits.val_indices, transform, device
+        voxel_library, data_splits.val_indices, val_test_transform, device
     )
     test_dataset = VoxelParameterDataset(
-        voxel_library, data_splits.test_indices, transform, device
+        voxel_library, data_splits.test_indices, val_test_transform, device
     )
     
     # Create DataLoaders

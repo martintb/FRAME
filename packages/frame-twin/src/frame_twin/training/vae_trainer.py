@@ -20,6 +20,7 @@ class VAETrainer(BaseTrainer):
             model = VAE(
                 input_channels=config.model.input_channels,
                 latent_channels=config.model.latent_channels,
+                channel_schedule=config.model.channel_schedule,
                 base_channels=config.model.base_channels,
                 levels=config.model.levels
             )
@@ -28,6 +29,7 @@ class VAETrainer(BaseTrainer):
             model = UNetVAE(
                 input_channels=config.model.input_channels,
                 latent_channels=config.model.latent_channels,
+                channel_schedule=config.model.channel_schedule,
                 base_channels=config.model.base_channels,
                 levels=config.model.levels,
                 norm_groups=config.model.norm_groups,
@@ -44,7 +46,8 @@ class VAETrainer(BaseTrainer):
             mask_threshold=getattr(config.loss, 'mask_threshold', 0.005) or 0.005,
             bg_weight=getattr(config.loss, 'bg_weight', 0.5) or 0.5,
             edge_weight=getattr(config.loss, 'edge_weight', 0.0) or 0.0,
-            free_bits=getattr(config.loss, 'free_bits', None)
+            free_bits=getattr(config.loss, 'free_bits', None),
+            label_smoothing=getattr(config.loss, 'label_smoothing', 0.0) or 0.0
         )
         
         # Create optimizer

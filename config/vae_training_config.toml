@@ -10,8 +10,8 @@
 # - AdamW optimizer for better generalization
 
 [metadata]
-name = "lnp_vae_anticollapse"
-description = "VAE training with anti-collapse settings for LNP compression + generation"
+name = "lnp_vae_crop_fracce"
+description = "VAE training with crop and fractional cross-entropy loss for LNP compression + generation"
 random_seed = 42
 
 [data]
@@ -22,12 +22,16 @@ val_ratio = 0.1
 test_ratio = 0.1
 # stratify_params = ["shell1_radius_nm", "shell2_probability"]  # for stratified splitting
 
+# Data augmentation
+random_crop_size = 64  # Train on random 64^3 crops
+random_rotation = true  # Apply random 90-degree rotations and flips
+
 [model]
 type = "vae"  # "vae" or "unet_vae"
 input_channels = 10  # Number of material channels
-latent_channels = 8  # Small latent space dimension
-base_channels = 32  # Base number of channels (increased from 32 for more capacity)
-levels = 2  # Number of downsampling levels (128³ → 16³ latent)
+latent_channels = 16  # Small latent space dimension
+channel_schedule = [16, 32, 64]  # Channel sizes at each level (inferred levels = 2)
+# Alternatively, use legacy params: base_channels = 32, levels = 2
 norm_groups = 8  # Number of groups for GroupNorm (UNetVAE only)
 
 [training]
@@ -45,11 +49,12 @@ kl_warmup_epochs = 5  # Fast warmup (was 15) - full KL weight by epoch 5
 [loss]
 reconstruction_weight = 1.0
 kl_weight = 0.005  # 5x stronger (was 0.001) to prevent collapse
-free_bits = 0.5  # Minimum KL per latent dimension (prevents per-dim collapse)
-reconstruction_type = "bce_logits"  # "mse" | "l1" | "bce_logits"
-mask_threshold = 0.005
+free_bits = 0.0  # Minimum KL per latent dimension (prevents per-dim collapse)
+reconstruction_type = "fractional_ce"  # "mse" | "l1" | "bce_logits"
+mask_threshold = 0.0
 bg_weight = 0.0
-edge_weight = 0.05  # Small edge loss for sharper boundaries (was 0.0)
+edge_weight = 0.0  # Small edge loss for sharper boundaries (was 0.0)
+label_smoothing = 0.0
 
 [checkpointing]
 experiments_dir = "/Users/tbm/frame_data/experiments"  # Base directory for experiments
@@ -60,4 +65,4 @@ save_best = true  # Save best validation loss
 
 [logging]
 log_every_steps = 25
-n_recon_compare = 50  # More frequent reconstruction comparisons
+n_recon_compare = 25  # More frequent reconstruction comparisons
