@@ -298,9 +298,19 @@ payload_head = 5
 payload_tail = 6
 bleb_head = 7
 bleb_tail = 8
+water = 9
 ```
 
 Each voxel contains **volume fractions** (0.0 to 1.0) for each channel, allowing sub-voxel accuracy.
+
+### Water Channel (Channel 9)
+
+The 10th channel (index 9) is automatically populated with water. Water fills voxels where the sum of all structural channels (0-8) is less than 0.1. This ensures that:
+- Empty regions (outside the LNP) are filled with water
+- Partially occupied voxels are topped up with water
+- Total volume fractions sum to 1.0 everywhere
+
+The water channel is computed automatically during voxelization and does not need to be explicitly specified in structure definitions.
 
 ### Voxelization Methods
 
@@ -475,7 +485,7 @@ frame-geo/
 
 ## Performance Considerations
 
-- **Memory**: Voxel grids are memory-intensive. 128³ × 10 channels = ~20 MB per structure
+- **Memory**: Voxel grids are memory-intensive. 128³ × 10 channels (including water) = ~20 MB per structure
 - **Parallelization**: ✅ Multi-process generation supported via `parallel_workers` config
   - Set to `-1` for auto-detection (uses CPU count - 1)
   - Set to `1` for sequential processing

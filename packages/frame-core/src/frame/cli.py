@@ -570,10 +570,33 @@ def main():
         handle_migrate_command(args)
     elif args.command == "view":
         handle_view_command(args)
-    elif args.command == "geo" and hasattr(args, "geo_args"):
-        # Fallback handling for geo
-        import subprocess
-        subprocess.run(["frame-geo"] + args.geo_args)
+    elif args.command == "geo":
+        # Handle geo commands
+        if hasattr(args, "geo_command"):
+            # Integrated geo subcommands
+            from frame_geo import cli as geo_cli
+            if args.geo_command == "generate":
+                geo_cli.generate_command(args)
+            elif args.geo_command == "validate-config":
+                geo_cli.validate_config_command(args)
+            elif args.geo_command == "list-types":
+                geo_cli.list_types_command()
+            elif args.geo_command == "visualize":
+                geo_cli.visualize_command(args)
+            elif args.geo_command == "stats":
+                geo_cli.stats_command(args)
+            elif args.geo_command == "voxelize":
+                geo_cli.voxelize_command(args)
+            else:
+                print(f"Unknown geo command: {args.geo_command}", file=sys.stderr)
+                sys.exit(1)
+        elif hasattr(args, "geo_args"):
+            # Fallback handling for geo
+            import subprocess
+            subprocess.run(["frame-geo"] + args.geo_args)
+        else:
+            print("Error: No geo command specified", file=sys.stderr)
+            sys.exit(1)
     elif args.command == "twin":
         # Handle twin commands
         if hasattr(args, "twin_command"):

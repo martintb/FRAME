@@ -35,18 +35,22 @@ class GenerationConfig:
     """Generation parameters."""
 
     num_samples: int
+    library_name: str
     parallel_workers: int = 1
     max_retries_per_sample: int = 100
     flush_batch_size: int = 100
+    sample_uniform_lhs: bool | str = False
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "GenerationConfig":
         """Create from dictionary."""
         return cls(
             num_samples=data["num_samples"],
+            library_name=data["library_name"],
             parallel_workers=data.get("parallel_workers", 1),
             max_retries_per_sample=data.get("max_retries_per_sample", 100),
             flush_batch_size=data.get("flush_batch_size", 100),
+            sample_uniform_lhs=data.get("sample_uniform_lhs", False),
         )
 
 
@@ -54,8 +58,6 @@ class GenerationConfig:
 class OutputConfig:
     """Output configuration."""
 
-    base_path: str
-    mode: str = "overwrite"
     save_parametric: bool = True
     save_voxelized: bool = True
     save_validation_logs: bool = True
@@ -65,8 +67,6 @@ class OutputConfig:
     def from_dict(cls, data: Dict[str, Any]) -> "OutputConfig":
         """Create from dictionary."""
         return cls(
-            base_path=data["base_path"],
-            mode=data.get("mode", "overwrite"),
             save_parametric=data.get("save_parametric", True),
             save_voxelized=data.get("save_voxelized", True),
             save_validation_logs=data.get("save_validation_logs", True),
@@ -149,7 +149,15 @@ class FrameGeoConfig:
         if self.generation.num_samples <= 0:
             raise ValueError("num_samples must be positive")
 
-        # Check output mode
-        if self.output.mode not in ["overwrite", "append"]:
-            raise ValueError("output.mode must be 'overwrite' or 'append'")
+        # Check library_name is provided
+        if not self.generation.library_name:
+            raise ValueError("library_name must be provided in [generation] section")
+
+        # Check sample_uniform_lhs parameter
+        valid_lhs_values = [False, True, "standard", "maximin"]
+        if self.generation.sample_uniform_lhs not in valid_lhs_values:
+            raise ValueError(
+                f"sample_uniform_lhs must be one of {valid_lhs_values}, "
+                f"got: {self.generation.sample_uniform_lhs}"
+            )
 

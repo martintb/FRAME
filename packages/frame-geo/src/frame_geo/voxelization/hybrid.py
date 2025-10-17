@@ -76,6 +76,9 @@ class HybridVoxelizer:
         for bleb in structure.blebs:
             self._voxelize_bleb(grid, X, Y, Z, bleb, structure.shell1, structure.center)
 
+        # 5. Add water channel (channel 9) where sum of all other channels is < 0.1
+        self._add_water_channel(grid)
+
         return grid
 
     def _voxelize_shell(
@@ -166,4 +169,27 @@ class HybridVoxelizer:
             # Bleb material: inside bleb layer AND outside shell1 outer surface
             mask = (r_bleb <= outer_r) & (r_bleb > inner_r) & (r_shell1 > shell1.outer_radius)
             grid[channel_idx][mask] = 1.0
+
+    def _add_water_channel(self, grid: torch.Tensor) -> None:
+        """Add water channel (channel 9) where sum of all other channels is < 0.1.
+
+        The water channel fills in voxels that are not occupied by structural components.
+        Where the sum of channels 0-8 is less than 0.1, water fills the remaining space
+        to ensure total occupancy sums to 1.0.
+
+        Args:
+            grid: Voxel grid to modify (in-place)
+        """
+        # Sum across first 9 channels (indices 0-8)
+        channel_sum = grid[:9].sum(dim=0)  # Shape: (nz, ny, nx)
+
+        # Create water channel: 1.0 - sum where sum < 0.1, 0.0 elsewhere
+        water = torch.where(
+            channel_sum < 0.1,
+            1.0 - channel_sum,
+            torch.zeros_like(channel_sum)
+        )
+
+        # Assign to channel 9 (the 10th channel)
+        grid[9] = water
 

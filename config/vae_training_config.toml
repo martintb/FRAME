@@ -10,12 +10,12 @@
 # - AdamW optimizer for better generalization
 
 [metadata]
-name = "lnp_vae_crop_fracce_freebits"
+name = "lnp_vae_10k_10ch_lhs_fracce_freebits"
 description = "VAE training with crop and fractional cross-entropy loss for LNP compression + generation"
 random_seed = 42
 
 [data]
-library_uuid = "lib_454c2a20e77b"  # lnp_5k_10ch library
+library_uuid = "lib_44f814b8fc99"  # lnp_10k_10ch_lhs library
 split_strategy = "random"  # or "stratified"
 train_ratio = 0.8
 val_ratio = 0.1
@@ -44,7 +44,12 @@ learning_rate = 2e-4
 optimizer = "adamw"  # AdamW for better generalization
 scheduler = "cosine"  # "cosine", "step", or "none"
 grad_clip = 1.0  # Gradient clipping value (0 to disable)
-kl_warmup_epochs = 20  # Fast warmup (was 15) - full KL weight by epoch 5
+
+# KL annealing configuration
+kl_annealing_strategy = "cyclical"  # "linear" or "cyclical"
+kl_warmup_epochs = 20  # For linear strategy: epochs to reach full KL weight
+kl_cyclical_cycle_epochs = 10  # For cyclical strategy: epochs per cycle
+kl_cyclical_ratio = 0.5  # For cyclical strategy: fraction of cycle spent increasing (0.5 = half up, half at max)
 
 [loss]
 reconstruction_weight = 1.0

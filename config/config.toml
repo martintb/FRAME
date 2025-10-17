@@ -13,7 +13,7 @@ experiments = "{data_root}/experiments"
 
 [frame.defaults]
 # Automatically migrate old data format when accessed
-auto_migrate = true
+auto_migrate = false
 
 # Strict validation - error if required metadata is missing
 strict_validation = true

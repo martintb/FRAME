@@ -45,7 +45,7 @@ def register_subcommands(subparsers):
         "list-types", help="List available structure types"
     )
     
-    # Visualize command  
+    # Visualize command
     visualize_parser = geo_subparsers.add_parser(
         "visualize", help="Visualize parametric structures from Zarr storage"
     )
@@ -57,6 +57,41 @@ def register_subcommands(subparsers):
     )
     visualize_parser.add_argument(
         "--random", type=int, help="Number of random structures to visualize"
+    )
+
+    # Stats command
+    stats_parser = geo_subparsers.add_parser(
+        "stats", help="Print parameter statistics from parametric structures"
+    )
+    stats_parser.add_argument(
+        "structures_path", type=str, help="Path to structures.zarr directory"
+    )
+    stats_parser.add_argument(
+        "--format", type=str, default="table", choices=["table", "json", "csv"],
+        help="Output format (default: table)"
+    )
+    stats_parser.add_argument(
+        "--output", type=str, default=None, help="Save to file (optional)"
+    )
+
+    # Voxelize command
+    voxelize_parser = geo_subparsers.add_parser(
+        "voxelize", help="Voxelize existing parametric structures"
+    )
+    voxelize_parser.add_argument(
+        "structures_path", type=str, help="Path to structures.zarr directory"
+    )
+    voxelize_parser.add_argument(
+        "output_path", type=str, help="Path to output voxel library directory"
+    )
+    voxelize_parser.add_argument(
+        "--config", type=str, help="Path to TOML configuration file (for voxelization settings)"
+    )
+    voxelize_parser.add_argument(
+        "--batch-size", type=int, default=10, help="Number of structures to process in parallel"
+    )
+    voxelize_parser.add_argument(
+        "--overwrite", action="store_true", help="Overwrite existing output directory"
     )
 
 
@@ -181,7 +216,7 @@ def generate_command(args):
         print(f"Loaded configuration from: {args.config}")
         print(f"Structure type: {config.structure_type}")
         print(f"Number of samples: {config.generation.num_samples}")
-        print(f"Output path: {config.output.base_path}")
+        print(f"Library name: {config.generation.library_name}")
 
         generator = StructureGenerator(config)
         generator.generate_batch()

@@ -162,14 +162,39 @@ class VAETrainer(BaseTrainer):
         return total_loss, metrics
 
     def _current_kl_weight(self) -> float:
-        """Compute current KL weight with optional warmup over epochs."""
-        warmup_epochs = getattr(self.config.training, 'kl_warmup_epochs', 0) or 0
+        """Compute current KL weight with optional warmup or cyclical annealing."""
         base_weight = self.loss_fn.kl_weight
-        if warmup_epochs <= 0:
-            return base_weight
-        # Linear schedule from 0 to base_weight over warmup_epochs
-        progress = min(1.0, max(0.0, (self.current_epoch + 1) / float(warmup_epochs)))
-        return base_weight * progress
+        strategy = getattr(self.config.training, 'kl_annealing_strategy', 'linear')
+
+        if strategy == 'cyclical':
+            # Cyclical annealing: periodic restarts to encourage exploration
+            cycle_epochs = getattr(self.config.training, 'kl_cyclical_cycle_epochs', None)
+            ratio = getattr(self.config.training, 'kl_cyclical_ratio', 0.5)
+
+            if cycle_epochs is None or cycle_epochs <= 0:
+                # Fallback to no annealing if parameters not set
+                return base_weight
+
+            # Calculate position within current cycle
+            epoch_in_cycle = (self.current_epoch + 1) % cycle_epochs
+
+            # Linear increase during the first (ratio * cycle_epochs) epochs
+            # Then hold at max for the rest of the cycle
+            if epoch_in_cycle < cycle_epochs * ratio:
+                progress = epoch_in_cycle / (cycle_epochs * ratio)
+            else:
+                progress = 1.0
+
+            return base_weight * progress
+
+        else:  # 'linear' strategy (default)
+            # One-time linear warmup from 0 to base_weight
+            warmup_epochs = getattr(self.config.training, 'kl_warmup_epochs', 0) or 0
+            if warmup_epochs <= 0:
+                return base_weight
+            # Linear schedule from 0 to base_weight over warmup_epochs
+            progress = min(1.0, max(0.0, (self.current_epoch + 1) / float(warmup_epochs)))
+            return base_weight * progress
     
     def train(self, start_epoch: int = 0) -> None:
         """Train the VAE model."""

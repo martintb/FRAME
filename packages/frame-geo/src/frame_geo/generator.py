@@ -21,13 +21,7 @@ from .statistics import compute_statistics
 from .visualization import LNPVisualizer
 from frame.voxel_grid import VoxelGrid
 from frame.storage import VoxelLibraryWriter
-
-# Optional: Use LibraryManager if available for UUID tracking
-try:
-    from frame.management import LibraryManager
-    HAS_LIBRARY_MANAGER = True
-except ImportError:
-    HAS_LIBRARY_MANAGER = False
+from frame.management import LibraryManager
 
 
 def _process_structure_batch(params_batch, config_dict, structure_type, validation_config, voxelization_config, save_voxelized, save_parametric):
@@ -134,8 +128,13 @@ class StructureGenerator:
         channel_map = config.voxelization.get("channels", {})
         self.voxelizer = HybridVoxelizer(config.grid, channel_map)
 
-        # Storage
-        self.parametric_storage = ParametricStorage(config.output.base_path)
+        # Initialize Library Manager
+        self.lib_manager = LibraryManager()
+        self.library = None
+        self.library_path = None
+
+        # Storage (will be initialized after library creation)
+        self.parametric_storage = None
         self.voxel_writer = None
 
         # Statistics tracking
@@ -150,15 +149,24 @@ class StructureGenerator:
         np.random.seed(self.config.metadata.get("random_seed", 42))
         torch.manual_seed(self.config.metadata.get("random_seed", 42))
 
-        # Prepare output directory
-        output_path = Path(self.config.output.base_path)
-        if self.config.output.mode == "overwrite" and output_path.exists():
-            shutil.rmtree(output_path)
-        output_path.mkdir(parents=True, exist_ok=True)
+        # Create library using LibraryManager
+        print(f"Creating library: {self.config.generation.library_name}")
+        self.library = self.lib_manager.create_library(
+            name=self.config.generation.library_name,
+            structure_type=self.config.structure_type,
+            n_structures=self.config.generation.num_samples,
+            tags=["generated", self.config.structure_type],
+            generation_config=None,  # Will save separately
+            structures_info={"format": "zarr"} if self.config.output.save_parametric else {},
+            voxels_info={"format": "zarr"} if self.config.output.save_voxelized else {},
+        )
+        self.library_path = self.library.path
+        print(f"Library UUID: {self.library.uuid}")
+        print(f"Library path: {self.library_path}")
 
-        # Build PyMC model
-        print("Building PyMC prior model...")
-        model = self.prior_builder.build_model()
+        # Initialize storage for this library
+        if self.config.output.save_parametric:
+            self.parametric_storage = ParametricStorage(str(self.library_path))
 
         # Sample from priors
         print(f"Sampling structures (target: {self.config.generation.num_samples})...")
@@ -167,27 +175,50 @@ class StructureGenerator:
         oversample_factor = 3  # Generate extra to account for rejections
         max_total_attempts = self.config.generation.num_samples * oversample_factor
 
-        with model:
-            # Sample from prior
-            trace = pm.sample_prior_predictive(
-                samples=max_total_attempts,
-                random_seed=self.config.metadata.get("random_seed", 42),
+        # Check if LHS sampling is enabled
+        lhs_mode = self.config.generation.sample_uniform_lhs
+        if lhs_mode and lhs_mode != False:
+            # Use Latin Hypercube Sampling for uniform priors
+            print(f"Using Latin Hypercube Sampling (method: {lhs_mode})...")
+
+            # Determine LHS method
+            if lhs_mode == True:
+                method = "standard"
+            else:
+                method = lhs_mode  # "standard" or "maximin"
+
+            # Generate LHS samples
+            all_params = self.prior_builder.build_lhs_samples(
+                num_samples=max_total_attempts,
+                method=method,
+                random_seed=self.config.metadata.get("random_seed", 42)
             )
+        else:
+            # Use standard PyMC random sampling
+            print("Building PyMC prior model...")
+            model = self.prior_builder.build_model()
 
-        # Extract parameter samples
-        param_samples = {}
-        for key in trace.prior.keys():
-            values = trace.prior[key].values
-            # Flatten to 1D
-            param_samples[key] = values.flatten()
+            with model:
+                # Sample from prior
+                trace = pm.sample_prior_predictive(
+                    samples=max_total_attempts,
+                    random_seed=self.config.metadata.get("random_seed", 42),
+                )
 
-        num_samples = len(next(iter(param_samples.values())))
-        
-        # Convert to list of parameter dicts
-        all_params = []
-        for i in range(num_samples):
-            params = {k: float(v[i]) for k, v in param_samples.items()}
-            all_params.append(params)
+            # Extract parameter samples
+            param_samples = {}
+            for key in trace.prior.keys():
+                values = trace.prior[key].values
+                # Flatten to 1D
+                param_samples[key] = values.flatten()
+
+            num_samples = len(next(iter(param_samples.values())))
+
+            # Convert to list of parameter dicts
+            all_params = []
+            for i in range(num_samples):
+                params = {k: float(v[i]) for k, v in param_samples.items()}
+                all_params.append(params)
 
         # Determine number of workers
         num_workers = self.config.generation.parallel_workers
@@ -203,16 +234,15 @@ class StructureGenerator:
         
         if self.config.output.save_voxelized:
             print("Initializing voxel storage...")
-            output_path = Path(self.config.output.base_path)
-            library_path = output_path / "voxels.zarr"
-            
+            voxels_path = self.library_path / "voxels.zarr"
+
             # Get grid shape and channel info
             n_channels = len(self.config.voxelization.get("channels", {}))
             voxel_shape = (self.config.grid.nz, self.config.grid.ny, self.config.grid.nx)
             channel_map = self.config.voxelization.get("channels", {})
-            
+
             self.voxel_writer = VoxelLibraryWriter.create(
-                path=library_path,
+                path=voxels_path,
                 n_structures=self.config.generation.num_samples,
                 voxel_shape=voxel_shape,
                 n_channels=n_channels,
@@ -236,13 +266,13 @@ class StructureGenerator:
 
         # Save metadata
         self._save_metadata()
-        
-        # Register library with LibraryManager if available
-        if HAS_LIBRARY_MANAGER:
-            self._register_library()
 
         # Print summary
         self._print_summary()
+
+        print(f"\n✓ Library created successfully!")
+        print(f"  UUID: {self.library.uuid}")
+        print(f"  Path: {self.library_path}")
     
     def _generate_sequential(self, all_params):
         """Sequential generation with streaming writes."""
@@ -460,18 +490,15 @@ class StructureGenerator:
 
     def _save_metadata(self) -> None:
         """Save metadata files (validation logs, statistics, config)."""
-        output_path = Path(self.config.output.base_path)
-
         # Save validation logs
         if self.config.output.save_validation_logs:
             print("Saving validation logs...")
-            with open(output_path / "validation_log.json", "w") as f:
+            with open(self.library_path / "validation_log.json", "w") as f:
                 json.dump(self.validation_stats, f, indent=2)
 
         # Save copy of config
-        config_copy_path = output_path / "config.toml"
+        config_copy_path = self.library_path / "config.json"
         print(f"Saving config copy to {config_copy_path}...")
-        # Note: Would need to save TOML, for now just save as JSON
         config_dict = {
             "metadata": self.config.metadata,
             "structure_type": self.config.structure_type,
@@ -483,83 +510,15 @@ class StructureGenerator:
                 "dy_nm": self.config.grid.dy_nm,
                 "dz_nm": self.config.grid.dz_nm,
             },
+            "generation": {
+                "num_samples": self.config.generation.num_samples,
+                "library_name": self.config.generation.library_name,
+                "sample_uniform_lhs": self.config.generation.sample_uniform_lhs,
+            },
             # Add other sections as needed
         }
-        with open(output_path / "config.json", "w") as f:
+        with open(config_copy_path, "w") as f:
             json.dump(config_dict, f, indent=2)
-    
-    def _register_library(self) -> None:
-        """Register generated library with LibraryManager for UUID tracking."""
-        if not HAS_LIBRARY_MANAGER:
-            return
-        
-        output_path = Path(self.config.output.base_path)
-        
-        # Check if voxels.zarr exists
-        voxels_path = output_path / "voxels.zarr"
-        if not voxels_path.exists():
-            print("Skipping library registration (no voxels.zarr found)")
-            return
-        
-        print("Registering library with LibraryManager...")
-        try:
-            lib_mgr = LibraryManager()
-            
-            # Read voxel manifest for metadata
-            manifest_path = voxels_path / "manifest.json"
-            if manifest_path.exists():
-                with open(manifest_path, "r") as f:
-                    voxel_manifest = json.load(f)
-            else:
-                voxel_manifest = {}
-            
-            # Read channel info
-            channel_info_path = voxels_path / "channel_info.json"
-            if channel_info_path.exists():
-                with open(channel_info_path, "r") as f:
-                    channel_info = json.load(f)
-            else:
-                channel_info = {}
-            
-            # Determine library name
-            lib_name = output_path.name
-            
-            # Create library entry
-            library = lib_mgr.create_library(
-                name=lib_name,
-                structure_type=self.config.structure_type,
-                n_structures=self.validation_stats.get("total_accepted", 0),
-                tags=["generated", self.config.structure_type],
-                structures_info={
-                    "path": "structures.zarr",
-                    "format": "zarr",
-                    "contains": ["shells", "payloads", "blebs", "parameters"]
-                } if (output_path / "structures.zarr").exists() else {},
-                voxels_info={
-                    "path": "voxels.zarr",
-                    "format": "zarr",
-                    "voxel_shape": voxel_manifest.get("voxel_shape", [128, 128, 128]),
-                    "voxel_size_nm": voxel_manifest.get("voxel_size_nm", 1.0),
-                    "n_channels": voxel_manifest.get("n_channels", 0),
-                    "channel_info": channel_info,
-                    "statistics": voxel_manifest.get("statistics", {}),
-                },
-            )
-            
-            # Copy data to library
-            lib_mgr.copy_data_to_library(
-                library.uuid,
-                structures_path=output_path / "structures.zarr" if (output_path / "structures.zarr").exists() else None,
-                voxels_path=voxels_path,
-            )
-            
-            print(f"✓ Library registered with UUID: {library.uuid}")
-            print(f"  Location: {library.path}")
-            
-        except Exception as e:
-            print(f"Warning: Failed to register library: {e}")
-            print("Library files are still available at the output path.")
-
 
     def _generate_visualizations(self, structures) -> None:
         """Generate visualizations for a subset of structures."""

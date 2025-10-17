@@ -129,8 +129,13 @@ class TrainingConfig(BaseModel):
     scheduler: Literal["cosine", "step", "none"] = "cosine"
     num_workers: int = Field(ge=0)
     grad_clip: Optional[float] = Field(None, ge=0.0)  # Gradient clipping value (None to disable)
-    kl_warmup_epochs: Optional[int] = Field(0, ge=0)  # Linear KL warmup epochs
-    
+
+    # KL annealing parameters
+    kl_warmup_epochs: Optional[int] = Field(0, ge=0)  # Linear KL warmup epochs (used when kl_annealing_strategy="linear")
+    kl_annealing_strategy: Literal["linear", "cyclical"] = Field("linear", description="KL annealing strategy: 'linear' for one-time warmup, 'cyclical' for periodic restarts")
+    kl_cyclical_cycle_epochs: Optional[int] = Field(None, gt=0, description="Number of epochs per cycle (only for cyclical strategy)")
+    kl_cyclical_ratio: Optional[float] = Field(None, gt=0.0, le=1.0, description="Fraction of each cycle spent increasing KL weight (only for cyclical strategy, e.g., 0.5 = half up, half at max)")
+
     # Scheduler-specific parameters
     scheduler_params: Optional[Dict] = None
 
