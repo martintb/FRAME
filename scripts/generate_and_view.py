@@ -80,33 +80,50 @@ def create_model_from_checkpoint(experiment, checkpoint_data, device: torch.devi
         device: Device to load model on
         
     Returns:
-        Tuple of (model, use_sigmoid)
+        Tuple of (model)
     """
     print(f"Creating {experiment.model_type} model...")
     
     # Get model config from checkpoint
     model_config = checkpoint_data.get('config', {}).get('model', {})
     
-    # Get loss config to determine if sigmoid is needed
-    loss_config = checkpoint_data.get('config', {}).get('loss', {})
-    use_sigmoid = loss_config.get('reconstruction_type', 'mse') == 'bce_logits'
-    
+    input_channels = model_config.get('input_channels', 10)
+    latent_channels = model_config.get('latent_channels', 8)
+    channel_schedule = model_config.get('channel_schedule')
+    base_channels = model_config.get('base_channels')
+    levels = model_config.get('levels')
+
+    def _legacy_schedule_kwargs():
+        """Fallback for older checkpoints that only stored base_channels/levels."""
+        return {
+            'base_channels': base_channels if base_channels is not None else 8,
+            'levels': levels if levels is not None else 3,
+        }
+
     if experiment.model_type == 'vae':
-        model = VAE(
-            input_channels=model_config.get('input_channels', 10),
-            latent_channels=model_config.get('latent_channels', 8),
-            base_channels=model_config.get('base_channels', 8),
-            levels=model_config.get('levels', 3)
-        )
+        vae_kwargs = {
+            'input_channels': input_channels,
+            'latent_channels': latent_channels,
+        }
+        if channel_schedule is not None:
+            vae_kwargs['channel_schedule'] = channel_schedule
+        else:
+            vae_kwargs.update(_legacy_schedule_kwargs())
+
+        model = VAE(**vae_kwargs)
     elif experiment.model_type == 'unet_vae':
-        model = UNetVAE(
-            input_channels=model_config.get('input_channels', 10),
-            latent_channels=model_config.get('latent_channels', 8),
-            base_channels=model_config.get('base_channels', 8),
-            levels=model_config.get('levels', 3),
-            norm_groups=model_config.get('norm_groups', 8),
-            skip_dropout_prob=model_config.get('skip_dropout_prob', 0.1)
-        )
+        unet_kwargs = {
+            'input_channels': input_channels,
+            'latent_channels': latent_channels,
+            'norm_groups': model_config.get('norm_groups', 8),
+            'skip_dropout_prob': model_config.get('skip_dropout_prob', 0.1),
+        }
+        if channel_schedule is not None:
+            unet_kwargs['channel_schedule'] = channel_schedule
+        else:
+            unet_kwargs.update(_legacy_schedule_kwargs())
+
+        model = UNetVAE(**unet_kwargs)
     else:
         raise ValueError(f"Unsupported model type: {experiment.model_type}")
     
@@ -118,41 +135,55 @@ def create_model_from_checkpoint(experiment, checkpoint_data, device: torch.devi
     print(f"Model loaded on {device}")
     print(f"  Input channels: {model.input_channels}")
     print(f"  Latent channels: {model.latent_channels}")
-    print(f"  Base channels: {model.base_channels}")
-    print(f"  Levels: {model.levels}")
+    if hasattr(model, 'base_channels'):
+        print(f"  Base channels: {model.base_channels}")
+    if hasattr(model, 'channel_schedule'):
+        print(f"  Channel schedule: {getattr(model, 'channel_schedule', None)}")
+    if hasattr(model, 'levels'):
+        print(f"  Levels: {model.levels}")
     if experiment.model_type == 'unet_vae':
         print(f"  Norm groups: {model.norm_groups}")
         print(f"  Skip dropout prob: {model.skip_dropout_prob}")
     
-    print(f"  Reconstruction type: {loss_config.get('reconstruction_type', 'mse')}")
-    print(f"  Apply sigmoid to outputs: {use_sigmoid}")
-    
-    return model, use_sigmoid
+    return model
 
 
-def generate_random_structure(model, device: torch.device, use_sigmoid: bool = False, channels_to_show: Optional[List[int]] = None):
+def generate_random_structure(model, device: torch.device, channels_to_show: Optional[List[int]] = None, reconstruction_type: str = 'fractional_ce', latent_size: Optional[int] = None):
     """Generate a structure from random latent sampling.
-    
+
     Args:
         model: Loaded VAE or UNet-VAE model
         device: Device to run on
-        use_sigmoid: Whether to apply sigmoid to the outputs
         channels_to_show: Optional list of channel indices to visualize
-        
+        reconstruction_type: Type of reconstruction loss used during training
+        latent_size: Latent spatial size (computed from training crop size)
+
     Returns:
         VoxelGrid object
     """
     print("Generating structure from random latent sampling...")
-    
+    if latent_size is not None:
+        print(f"Using explicit latent size: {latent_size}³")
+
     with torch.no_grad():
-        # Generate structure using the model's sample method
-        generated_logits = model.sample(num_samples=1, device=device)
-        
-        # Apply sigmoid if the model was trained with bce_logits loss
-        if use_sigmoid:
+        # Generate structure using the model's sample method with correct latent size
+        generated_logits = model.sample(num_samples=1, device=device, latent_size=latent_size)
+
+        # Apply appropriate activation based on reconstruction type
+        if reconstruction_type == 'fractional_ce':
+            # Use softmax for proper simplex normalization (each voxel's channels sum to 1)
+            generated_tensor = torch.softmax(generated_logits, dim=1)
+            print(f"  Applied softmax activation (reconstruction_type={reconstruction_type})")
+        elif reconstruction_type == 'bce_logits':
+            # For binary cross-entropy with logits, use sigmoid
             generated_tensor = torch.sigmoid(generated_logits)
-            print("  Applied sigmoid to convert logits to probabilities")
+            print(f"  Applied sigmoid activation (reconstruction_type={reconstruction_type})")
+        elif reconstruction_type in ['mse', 'l1']:
+            generated_tensor = generated_logits
+            print(f"  No activation applied (reconstruction_type={reconstruction_type})")
         else:
+            # Default to identity to avoid altering logits unexpectedly
+            print(f"  WARNING: Unknown reconstruction_type '{reconstruction_type}', leaving logits unchanged")
             generated_tensor = generated_logits
         
         print(f"  Generated range: [{generated_tensor.min():.4f}, {generated_tensor.max():.4f}]")
@@ -272,13 +303,58 @@ def main():
     try:
         # Load experiment and checkpoint
         experiment, checkpoint, checkpoint_data = load_experiment_and_checkpoint(args.experiment_uuid)
-        
-        # Create and load model (returns use_sigmoid flag from loss config)
-        model, use_sigmoid = create_model_from_checkpoint(experiment, checkpoint_data, device)
-        use_sigmoid = True
-        
-        # Generate structure (sigmoid applied internally based on loss config)
-        voxel_grid = generate_random_structure(model, device, use_sigmoid, channels_to_show)
+
+        # Create and load model
+        model = create_model_from_checkpoint(experiment, checkpoint_data, device)
+
+        # Extract reconstruction type from checkpoint config
+        reconstruction_type = 'fractional_ce'  # Default
+        if 'config' in checkpoint_data and 'loss' in checkpoint_data['config']:
+            reconstruction_type = checkpoint_data['config']['loss'].get('reconstruction_type', 'fractional_ce')
+        print(f"Detected reconstruction_type: {reconstruction_type}")
+
+        # Extract the correct latent size from training config
+        # This is CRITICAL: training on crops requires different latent size than full resolution
+        latent_size = None
+        crop_size = None
+
+        # Try to get crop_size from checkpoint config first
+        if 'config' in checkpoint_data and 'data' in checkpoint_data['config']:
+            crop_size = checkpoint_data['config']['data'].get('random_crop_size')
+
+        # If not in checkpoint, try to load from experiment's initial config file
+        if crop_size is None:
+            initial_config_path = experiment.path / "configs" / "initial_config.toml"
+            if initial_config_path.exists():
+                try:
+                    import tomllib as toml
+                except ImportError:
+                    import tomli as toml
+
+                try:
+                    with open(initial_config_path, 'rb') as f:
+                        initial_config = toml.load(f)
+                    crop_size = initial_config.get('data', {}).get('random_crop_size')
+                    if crop_size is not None:
+                        print(f"Loaded crop_size from experiment config: {crop_size}")
+                except Exception as e:
+                    print(f"Warning: Could not load initial config: {e}")
+
+        # Compute latent size based on crop_size
+        if crop_size is not None:
+            # Model was trained on crops, compute latent size accordingly
+            latent_size = crop_size // (2 ** model.levels)
+            print(f"Model trained on {crop_size}³ crops")
+            print(f"Computed latent size: {latent_size}³ (crop_size={crop_size}, levels={model.levels})")
+        else:
+            # Assume full resolution training (128³)
+            latent_size = 128 // (2 ** model.levels)
+            print(f"WARNING: Could not determine training crop size from config")
+            print(f"Assuming full resolution training (128³)")
+            print(f"Computed latent size: {latent_size}³ (levels={model.levels})")
+
+        # Generate structure
+        voxel_grid = generate_random_structure(model, device, channels_to_show, reconstruction_type, latent_size)
         
         # Visualize in napari
         visualize_in_napari(voxel_grid)

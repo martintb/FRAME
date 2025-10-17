@@ -133,18 +133,28 @@ class VAE(nn.Module):
                         or falls back to 128 // (2 ** levels) if not yet cached.
 
         Returns:
-            Generated samples
+            Generated samples (logits)
         """
         # Determine latent spatial size
         if latent_size is None:
             if self.latent_spatial_size is not None:
                 # Use cached size from forward pass
                 latent_size = self.latent_spatial_size
+                print(f"VAE.sample: Using cached latent_size={latent_size}³ from forward pass")
             else:
                 # Fallback to computation (assumes 128^3 input)
                 latent_size = 128 // (2 ** self.levels)
+                print(f"VAE.sample: WARNING - Using fallback latent_size={latent_size}³ (assumes 128³ input)")
+                print(f"  This may be incorrect if model was trained on crops!")
+                print(f"  Pass latent_size explicitly based on training crop_size")
+        else:
+            print(f"VAE.sample: Using explicit latent_size={latent_size}³")
+            # Warn if it doesn't match cached size
+            if self.latent_spatial_size is not None and latent_size != self.latent_spatial_size:
+                print(f"  WARNING: Requested latent_size ({latent_size}³) differs from cached size ({self.latent_spatial_size}³)")
 
         z = torch.randn(
             num_samples, self.latent_channels, latent_size, latent_size, latent_size, device=device
         )
+        print(f"VAE.sample: Sampling from N(0,1) with shape {z.shape}")
         return self.decode(z)

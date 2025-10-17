@@ -236,7 +236,7 @@ class VAELoss(nn.Module):
 
             # Clamp each dimension's KL to be at least free_bits
             # Shape: (B, C, D, H, W) -> sum over spatial dims, clamp, then mean over batch and channels
-            kl_per_dim_spatial = kl_per_dim.sum(dim=(2, 3, 4))  # (B, C)
+            kl_per_dim_spatial = kl_per_dim.mean(dim=(2, 3, 4))  # (B, C)
             kl_clamped = torch.clamp(kl_per_dim_spatial, min=self.free_bits)
             kl_loss = kl_clamped.mean()
         else:

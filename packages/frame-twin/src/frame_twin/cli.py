@@ -3,7 +3,7 @@
 import argparse
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 import torch
 try:
     import tomllib as toml  # Python 3.11+
@@ -14,6 +14,8 @@ from .config import VAEConfig, DDPMConfig, InferenceConfig
 from .training import VAETrainer
 from .data import create_data_splits, create_data_loaders
 from frame.storage import VoxelLibrary
+from frame.voxel_grid import VoxelGrid
+from frame.visualize_napari import NapariViewer
 
 
 def _resolve_library_path(library_ref: str) -> tuple[Path, str]:
@@ -82,11 +84,64 @@ def register_subcommands(subparsers):
     # Generate command
     generate_parser = twin_subparsers.add_parser('generate', help='Generate structures')
     generate_parser.add_argument('config', help='Path to inference config TOML file')
-    
+
     # Continue training command
     continue_parser = twin_subparsers.add_parser('continue', help='Continue training from experiment')
     continue_parser.add_argument('experiment_uuid', help='Experiment UUID to continue')
     continue_parser.add_argument('--config', help='Optional updated config file')
+
+    # Validate VAE command
+    validate_vae_parser = twin_subparsers.add_parser('validate-vae', help='Validate VAE reconstruction with side-by-side visualization')
+    validate_vae_parser.add_argument('experiment_or_checkpoint', help='Experiment UUID (e.g., exp_12345678) or path to VAE checkpoint (legacy)')
+    validate_vae_parser.add_argument('voxel_library', nargs='?', default=None, help='Path to voxel library (only needed if using legacy checkpoint path)')
+    validate_vae_parser.add_argument('--structure-id', type=int, default=None, help='Structure ID to validate (default: random)')
+    validate_vae_parser.add_argument('--random', action='store_true', help='Use random structure ID (default behavior)')
+    validate_vae_parser.add_argument('--device', default='auto', help='Device to use (auto, cpu, cuda, mps)')
+
+    # Sample from prior command
+    sample_prior_parser = twin_subparsers.add_parser(
+        'sample-prior', help='Sample a new structure from a trained VAE latent prior'
+    )
+    sample_prior_parser.add_argument('experiment_uuid', help='Experiment UUID with trained VAE/UNet-VAE')
+    sample_prior_parser.add_argument(
+        '--device', default='auto', choices=['auto', 'cpu', 'cuda', 'mps'],
+        help='Device to use for sampling (default: auto)'
+    )
+    sample_prior_parser.add_argument(
+        '--channels', type=str,
+        help="Optional comma-separated channel indices to visualize (e.g., '0,1,2')"
+    )
+
+    # Perturb structure command
+    perturb_parser = twin_subparsers.add_parser(
+        'perturb-structure', help='Encode a structure and decode perturbed latent samples'
+    )
+    perturb_parser.add_argument('experiment_uuid', help='Experiment UUID with trained VAE/UNet-VAE')
+    perturb_parser.add_argument(
+        '--structure-id', type=int, default=None,
+        help='Structure ID to use (default: prompt for random selection)'
+    )
+    perturb_parser.add_argument(
+        '--random', action='store_true',
+        help='Force random structure selection (overrides --structure-id)'
+    )
+    perturb_parser.add_argument(
+        '--device', default='auto',
+        choices=['auto', 'cpu', 'cuda', 'mps'],
+        help='Device to use for encoding/decoding (default: auto)'
+    )
+    perturb_parser.add_argument(
+        '--num-samples', type=int, default=3,
+        help='Number of perturbed latent samples to decode (default: 3)'
+    )
+    perturb_parser.add_argument(
+        '--sigma', type=float, default=0.4,
+        help='Standard deviation of Gaussian noise added in latent space (default: 0.4)'
+    )
+    perturb_parser.add_argument(
+        '--channels', type=str,
+        help="Optional comma-separated channel indices to visualize (e.g., '0,4,7')"
+    )
 
 
 def main():
@@ -114,12 +169,57 @@ def main():
     
     # Validate VAE command
     validate_vae_parser = subparsers.add_parser('validate-vae', help='Validate VAE reconstruction with side-by-side visualization')
-    validate_vae_parser.add_argument('checkpoint', help='Path to VAE checkpoint')
-    validate_vae_parser.add_argument('voxel_library', help='Path to voxel library')
+    validate_vae_parser.add_argument('experiment_or_checkpoint', help='Experiment UUID (e.g., exp_12345678) or path to VAE checkpoint (legacy)')
+    validate_vae_parser.add_argument('voxel_library', nargs='?', default=None, help='Path to voxel library (only needed if using legacy checkpoint path)')
     validate_vae_parser.add_argument('--structure-id', type=int, default=None, help='Structure ID to validate (default: random)')
     validate_vae_parser.add_argument('--random', action='store_true', help='Use random structure ID (default behavior)')
     # Note: channel, all-channels, and slicing-mode arguments removed since we now show all channels by default
     validate_vae_parser.add_argument('--device', default='auto', help='Device to use (auto, cpu, cuda, mps)')
+
+    # Sample from prior command
+    sample_prior_parser = subparsers.add_parser(
+        'sample-prior', help='Sample a new structure from a trained VAE latent prior'
+    )
+    sample_prior_parser.add_argument('experiment_uuid', help='Experiment UUID with trained VAE/UNet-VAE')
+    sample_prior_parser.add_argument(
+        '--device', default='auto', choices=['auto', 'cpu', 'cuda', 'mps'],
+        help='Device to use for sampling (default: auto)'
+    )
+    sample_prior_parser.add_argument(
+        '--channels', type=str,
+        help="Optional comma-separated channel indices to visualize (e.g., '0,1,2')"
+    )
+
+    # Perturb structure command
+    perturb_parser = subparsers.add_parser(
+        'perturb-structure', help='Encode a structure and decode perturbed latent samples'
+    )
+    perturb_parser.add_argument('experiment_uuid', help='Experiment UUID with trained VAE/UNet-VAE')
+    perturb_parser.add_argument(
+        '--structure-id', type=int, default=None,
+        help='Structure ID to use (default: prompt for random selection)'
+    )
+    perturb_parser.add_argument(
+        '--random', action='store_true',
+        help='Force random structure selection (overrides --structure-id)'
+    )
+    perturb_parser.add_argument(
+        '--device', default='auto',
+        choices=['auto', 'cpu', 'cuda', 'mps'],
+        help='Device to use for encoding/decoding (default: auto)'
+    )
+    perturb_parser.add_argument(
+        '--num-samples', type=int, default=3,
+        help='Number of perturbed latent samples to decode (default: 3)'
+    )
+    perturb_parser.add_argument(
+        '--sigma', type=float, default=0.4,
+        help='Standard deviation of Gaussian noise added in latent space (default: 0.4)'
+    )
+    perturb_parser.add_argument(
+        '--channels', type=str,
+        help="Optional comma-separated channel indices to visualize (e.g., '0,4,7')"
+    )
     
     args = parser.parse_args()
     
@@ -136,12 +236,60 @@ def main():
         structure_id = args.structure_id
         if structure_id is None:
             structure_id = 'random'  # Will be handled in the function
-        
-        validate_vae_reconstruction(
-            checkpoint_path=args.checkpoint,
-            voxel_library_path=args.voxel_library,
+
+        # Check if first argument is experiment UUID or checkpoint path
+        exp_or_ckpt = args.experiment_or_checkpoint
+        if exp_or_ckpt.startswith('exp_'):
+            # New mode: experiment UUID
+            validate_vae_from_experiment(
+                experiment_uuid=exp_or_ckpt,
+                structure_id=structure_id,
+                device=args.device
+            )
+        else:
+            # Legacy mode: checkpoint path + library path
+            if args.voxel_library is None:
+                print("Error: When using checkpoint path, voxel_library argument is required")
+                sys.exit(1)
+            validate_vae_reconstruction(
+                checkpoint_path=exp_or_ckpt,
+                voxel_library_path=args.voxel_library,
+                structure_id=structure_id,
+                device=args.device
+            )
+    elif args.command == 'sample-prior':
+        try:
+            channels = _parse_channels_arg(args.channels)
+        except ValueError as exc:
+            print(f"Error: {exc}")
+            sys.exit(1)
+        sample_prior_from_experiment(
+            experiment_uuid=args.experiment_uuid,
+            device_choice=args.device,
+            channels_to_show=channels
+        )
+    elif args.command == 'perturb-structure':
+        try:
+            channels = _parse_channels_arg(args.channels)
+        except ValueError as exc:
+            print(f"Error: {exc}")
+            sys.exit(1)
+        structure_id = args.structure_id if args.structure_id is not None else 'random'
+        if args.random:
+            structure_id = 'random'
+        if args.num_samples <= 0:
+            print("Error: --num-samples must be positive")
+            sys.exit(1)
+        if args.sigma < 0:
+            print("Error: --sigma must be non-negative")
+            sys.exit(1)
+        perturb_structure_from_experiment(
+            experiment_uuid=args.experiment_uuid,
             structure_id=structure_id,
-            device=args.device
+            device_choice=args.device,
+            num_samples=args.num_samples,
+            sigma=args.sigma,
+            channels_to_show=channels
         )
     else:
         parser.print_help()
@@ -803,6 +951,519 @@ n_recon_compare = 100  # Log generated samples every N steps (both training and 
         print("- REPLACE_WITH_VAE_EXPERIMENT_UUID: Use 'frame experiment list' to find your VAE experiment UUID")
 
 
+def _parse_channels_arg(channels: Optional[str]) -> Optional[List[int]]:
+    """Parse a comma-separated string of channel indices."""
+    if channels is None:
+        return None
+    try:
+        parsed = [int(x.strip()) for x in channels.split(',') if x.strip()]
+    except ValueError as exc:  # pragma: no cover - user error path
+        raise ValueError("Channels must be a comma-separated list of integers") from exc
+    if not parsed:
+        raise ValueError("Channels list cannot be empty")
+    return parsed
+
+
+def _determine_device(device_choice: str) -> torch.device:
+    """Resolve device string to torch.device with auto detection."""
+    if device_choice == 'auto':
+        if torch.cuda.is_available():
+            device = torch.device('cuda')
+        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            device = torch.device('mps')
+        else:
+            device = torch.device('cpu')
+    else:
+        device = torch.device(device_choice)
+    print(f"Using device: {device}")
+    return device
+
+
+def _load_experiment_and_checkpoint(experiment_uuid: str):
+    """Load experiment metadata and its best checkpoint."""
+    from frame.management import ExperimentManager, CheckpointManager
+
+    print(f"Loading experiment {experiment_uuid}...")
+    exp_mgr = ExperimentManager()
+    experiment = exp_mgr.get_experiment(experiment_uuid)
+    if experiment is None:
+        raise ValueError(f"Experiment {experiment_uuid} not found")
+
+    print(f"Found experiment: {experiment.name} ({experiment.model_type})")
+    print(f"Status: {experiment.status}")
+
+    if not experiment.best_checkpoint:
+        raise ValueError(
+            f"Experiment {experiment_uuid} has no best checkpoint set. "
+            "Use 'frame checkpoint set-best' to mark one."
+        )
+
+    ckpt_mgr = CheckpointManager()
+    checkpoint = ckpt_mgr.get_checkpoint(experiment.path, experiment.best_checkpoint)
+    if checkpoint is None:
+        raise ValueError(f"Best checkpoint {experiment.best_checkpoint} not found")
+
+    print(f"Using best checkpoint: {checkpoint.uuid}")
+    print(f"  Epoch: {checkpoint.epoch}, Step: {checkpoint.step}")
+    print(f"  Metrics: {checkpoint.metrics}")
+
+    checkpoint_data = torch.load(checkpoint.checkpoint_path, map_location='cpu')
+    return experiment, checkpoint, checkpoint_data
+
+
+def _create_model_from_checkpoint(experiment, checkpoint_data, device: torch.device):
+    """Instantiate model from checkpoint configuration."""
+    from .models import VAE, UNetVAE
+
+    print(f"Creating {experiment.model_type} model...")
+    model_config = checkpoint_data.get('config', {}).get('model', {}) or {}
+
+    input_channels = model_config.get('input_channels', 10)
+    latent_channels = model_config.get('latent_channels', 8)
+    channel_schedule = model_config.get('channel_schedule')
+    base_channels = model_config.get('base_channels')
+    levels = model_config.get('levels')
+
+    def _legacy_schedule_kwargs():
+        return {
+            'base_channels': base_channels if base_channels is not None else 8,
+            'levels': levels if levels is not None else 3,
+        }
+
+    if experiment.model_type == 'vae':
+        vae_kwargs = {
+            'input_channels': input_channels,
+            'latent_channels': latent_channels,
+        }
+        if channel_schedule is not None:
+            vae_kwargs['channel_schedule'] = channel_schedule
+        else:
+            vae_kwargs.update(_legacy_schedule_kwargs())
+        model = VAE(**vae_kwargs)
+    elif experiment.model_type == 'unet_vae':
+        unet_kwargs = {
+            'input_channels': input_channels,
+            'latent_channels': latent_channels,
+            'norm_groups': model_config.get('norm_groups', 8),
+            'skip_dropout_prob': model_config.get('skip_dropout_prob', 0.1),
+        }
+        if channel_schedule is not None:
+            unet_kwargs['channel_schedule'] = channel_schedule
+        else:
+            unet_kwargs.update(_legacy_schedule_kwargs())
+        model = UNetVAE(**unet_kwargs)
+    else:
+        raise ValueError(f"Unsupported model type: {experiment.model_type}")
+
+    model.load_state_dict(checkpoint_data['model_state_dict'])
+    model.to(device)
+    model.eval()
+
+    print(f"Model loaded on {device}")
+    if hasattr(model, 'input_channels'):
+        print(f"  Input channels: {model.input_channels}")
+    if hasattr(model, 'latent_channels'):
+        print(f"  Latent channels: {model.latent_channels}")
+    if hasattr(model, 'base_channels'):
+        print(f"  Base channels: {model.base_channels}")
+    if hasattr(model, 'channel_schedule'):
+        print(f"  Channel schedule: {getattr(model, 'channel_schedule', None)}")
+    if hasattr(model, 'levels'):
+        print(f"  Levels: {model.levels}")
+    if experiment.model_type == 'unet_vae':
+        print(f"  Norm groups: {model.norm_groups}")
+        print(f"  Skip dropout prob: {model.skip_dropout_prob}")
+
+    return model
+
+
+def _get_reconstruction_type(checkpoint_data) -> str:
+    """Extract reconstruction loss type from checkpoint configuration."""
+    loss_cfg = checkpoint_data.get('config', {}).get('loss', {}) if isinstance(checkpoint_data, dict) else {}
+    reconstruction_type = loss_cfg.get('reconstruction_type', 'fractional_ce')
+    print(f"Detected reconstruction_type: {reconstruction_type}")
+    return reconstruction_type
+
+
+def _infer_latent_size(experiment, checkpoint_data, model) -> int:
+    """Infer latent spatial size based on training configuration."""
+    crop_size = checkpoint_data.get('config', {}).get('data', {}).get('random_crop_size')
+
+    if crop_size is None:
+        initial_config_path = experiment.path / "configs" / "initial_config.toml"
+        if initial_config_path.exists():
+            try:
+                with open(initial_config_path, 'rb') as f:
+                    initial_config = toml.load(f)
+                crop_size = initial_config.get('data', {}).get('random_crop_size')
+                if crop_size is not None:
+                    print(f"Loaded crop_size from experiment config: {crop_size}")
+            except Exception as exc:  # pragma: no cover - best effort load
+                print(f"Warning: Could not load initial config: {exc}")
+
+    if crop_size is not None:
+        latent_size = crop_size // (2 ** getattr(model, 'levels', 1))
+        print(f"Model trained on {crop_size}³ crops")
+        print(f"Computed latent size: {latent_size}³ (crop_size={crop_size}, levels={getattr(model, 'levels', 'n/a')})")
+    else:
+        latent_size = 128 // (2 ** getattr(model, 'levels', 1))
+        print("WARNING: Could not determine training crop size from config")
+        print("Assuming full resolution training (128³)")
+        print(f"Computed latent size: {latent_size}³ (levels={getattr(model, 'levels', 'n/a')})")
+
+    return latent_size
+
+
+def _apply_activation(tensor: torch.Tensor, reconstruction_type: str) -> torch.Tensor:
+    """Map logits to data space based on reconstruction type."""
+    if reconstruction_type == 'fractional_ce':
+        activated = torch.softmax(tensor, dim=1)
+        print("  Applied softmax activation (fractional_ce)")
+    elif reconstruction_type == 'bce_logits':
+        activated = torch.sigmoid(tensor)
+        print("  Applied sigmoid activation (bce_logits)")
+    elif reconstruction_type in {'mse', 'l1'}:
+        activated = tensor
+        print(f"  No activation applied (reconstruction_type={reconstruction_type})")
+    else:
+        print(f"  WARNING: Unknown reconstruction_type '{reconstruction_type}', leaving logits unchanged")
+        activated = tensor
+    return activated
+
+
+def _validate_channel_indices(indices: Optional[List[int]], n_channels: int) -> None:
+    """Ensure requested channel indices are valid."""
+    if indices is None:
+        return
+    for idx in indices:
+        if idx < 0 or idx >= n_channels:
+            raise ValueError(f"Channel index {idx} is out of range (0-{n_channels - 1})")
+
+
+def _generate_prior_sample_voxel(
+    model,
+    device: torch.device,
+    reconstruction_type: str,
+    latent_size: int,
+    channels_to_show: Optional[List[int]]
+) -> VoxelGrid:
+    """Sample latent prior and return VoxelGrid."""
+    with torch.no_grad():
+        logits = model.sample(num_samples=1, device=device, latent_size=latent_size)
+        generated = _apply_activation(logits, reconstruction_type)
+
+    generated_data = generated.squeeze(0).cpu().float()
+    n_channels = generated_data.shape[0]
+    _validate_channel_indices(channels_to_show, n_channels)
+
+    if channels_to_show is not None:
+        generated_data = generated_data[channels_to_show]
+        channel_names = {f'channel_{orig_idx}': new_idx for new_idx, orig_idx in enumerate(channels_to_show)}
+        print(f"Filtered to channels {channels_to_show}")
+    else:
+        channel_names = {f'channel_{i}': i for i in range(n_channels)}
+
+    print(f"  Generated range: [{generated_data.min():.4f}, {generated_data.max():.4f}]")
+    print(f"  Generated mean: {generated_data.mean():.4f}")
+    non_zero_pct = (generated_data > 0.1).sum().item() / generated_data.numel() * 100
+    print(f"  Non-zero voxels: {non_zero_pct:.1f}%")
+    print(f"Generated structure shape: {tuple(generated_data.shape)}")
+
+    metadata = {
+        'generated_from': 'random_latent_sampling',
+        'model_type': type(model).__name__,
+        'channels_requested': channels_to_show,
+    }
+    return VoxelGrid(
+        data=generated_data,
+        voxel_size=1.0,
+        channels=channel_names,
+        metadata=metadata
+    )
+
+
+def sample_prior_from_experiment(
+    experiment_uuid: str,
+    device_choice: str = 'auto',
+    channels_to_show: Optional[List[int]] = None
+) -> None:
+    """CLI entry: sample from latent prior and visualize in napari."""
+    experiment, checkpoint, checkpoint_data = _load_experiment_and_checkpoint(experiment_uuid)
+    if experiment.model_type not in {'vae', 'unet_vae'}:
+        raise ValueError(f"Experiment {experiment_uuid} is not a VAE/UNet-VAE (got {experiment.model_type})")
+
+    device = _determine_device(device_choice)
+    model = _create_model_from_checkpoint(experiment, checkpoint_data, device)
+    reconstruction_type = _get_reconstruction_type(checkpoint_data)
+    latent_size = _infer_latent_size(experiment, checkpoint_data, model)
+
+    voxel_grid = _generate_prior_sample_voxel(
+        model=model,
+        device=device,
+        reconstruction_type=reconstruction_type,
+        latent_size=latent_size,
+        channels_to_show=channels_to_show
+    )
+
+    print("Opening napari viewer for sampled structure...")
+    viewer = NapariViewer.view_structure(voxel_grid)
+    try:
+        viewer.title = f"{experiment.name} – Prior Sample"
+    except AttributeError:  # pragma: no cover - fallback for older napari
+        viewer.window._qt_window.setWindowTitle(f"{experiment.name} – Prior Sample")
+
+    import napari  # Local import to avoid dependency when not visualizing
+    napari.run()
+
+
+def _load_primary_library_from_experiment(experiment) -> VoxelLibrary:
+    """Load primary voxel library associated with experiment."""
+    import json
+
+    library_refs_path = experiment.path / "library_refs.json"
+    if not library_refs_path.exists():
+        raise FileNotFoundError(f"Library references not found at {library_refs_path}")
+
+    with open(library_refs_path, 'r') as f:
+        library_refs = json.load(f)
+
+    library_uuid = library_refs.get('primary')
+    if not library_uuid:
+        raise ValueError(f"No primary library reference found in {library_refs_path}")
+
+    library_path, _ = _resolve_library_path(library_uuid)
+    print(f"Using library: {library_uuid}")
+    print(f"Library path: {library_path}")
+    return VoxelLibrary(library_path)
+
+
+def _select_structure_index(voxel_library: VoxelLibrary, structure_id) -> int:
+    """Resolve or prompt for structure ID."""
+    num_structures = len(voxel_library)
+    if num_structures == 0:
+        raise ValueError("Voxel library is empty")
+
+    if structure_id in (None, 'random'):
+        import random
+        structure_idx = random.randint(0, num_structures - 1)
+        print(f"Randomly selected structure ID: {structure_idx}")
+    else:
+        structure_idx = int(structure_id)
+        print(f"Using specified structure ID: {structure_idx}")
+
+    if structure_idx < 0 or structure_idx >= num_structures:
+        raise ValueError(f"Structure ID {structure_idx} is out of range (0-{num_structures - 1})")
+
+    print(f"\nAvailable structure IDs: 0 to {num_structures - 1}")
+    print(f"Current selection: {structure_idx}")
+    try:
+        user_input = input("Enter a different structure ID (or press Enter to continue): ").strip()
+        if user_input:
+            new_structure_idx = int(user_input)
+            if 0 <= new_structure_idx < num_structures:
+                structure_idx = new_structure_idx
+                print(f"Changed to structure ID: {structure_idx}")
+            else:
+                print(f"Invalid structure ID {new_structure_idx}. Keeping current selection: {structure_idx}")
+    except (ValueError, KeyboardInterrupt):  # pragma: no cover - interactive path
+        print(f"Keeping current selection: {structure_idx}")
+
+    return structure_idx
+
+
+def _filter_voxel_grid_channels(
+    voxel_grid: VoxelGrid,
+    channels_to_show: Optional[List[int]]
+) -> VoxelGrid:
+    """Return voxel grid limited to selected channels."""
+    if channels_to_show is None:
+        return voxel_grid
+
+    data = voxel_grid.data
+    _validate_channel_indices(channels_to_show, data.shape[0])
+
+    filtered_data = data[channels_to_show].clone()
+    if voxel_grid.channels:
+        index_to_name = {idx: name for name, idx in voxel_grid.channels.items()}
+        new_channels = {}
+        for new_idx, original_idx in enumerate(channels_to_show):
+            name = index_to_name.get(original_idx, f'channel_{original_idx}')
+            new_channels[name] = new_idx
+    else:
+        new_channels = {f'channel_{orig_idx}': new_idx for new_idx, orig_idx in enumerate(channels_to_show)}
+
+    metadata = dict(voxel_grid.metadata or {})
+    return VoxelGrid(
+        data=filtered_data,
+        voxel_size=voxel_grid.voxel_size,
+        channels=new_channels,
+        metadata=metadata
+    )
+
+
+def perturb_structure_from_experiment(
+    experiment_uuid: str,
+    structure_id,
+    device_choice: str = 'auto',
+    num_samples: int = 3,
+    sigma: float = 0.4,
+    channels_to_show: Optional[List[int]] = None
+) -> None:
+    """CLI entry: encode structure, perturb latent, decode and visualize."""
+    experiment, checkpoint, checkpoint_data = _load_experiment_and_checkpoint(experiment_uuid)
+    if experiment.model_type not in {'vae', 'unet_vae'}:
+        raise ValueError(f"Experiment {experiment_uuid} is not a VAE/UNet-VAE (got {experiment.model_type})")
+
+    device = _determine_device(device_choice)
+    model = _create_model_from_checkpoint(experiment, checkpoint_data, device)
+    reconstruction_type = _get_reconstruction_type(checkpoint_data)
+    voxel_library = _load_primary_library_from_experiment(experiment)
+    structure_idx = _select_structure_index(voxel_library, structure_id)
+
+    original_voxel = voxel_library[structure_idx]
+    print(f"Selected structure {structure_idx} with shape {original_voxel.shape}")
+
+    # Clone to avoid mutating library data and optionally filter channels
+    working_voxel = original_voxel.clone()
+    working_voxel = _filter_voxel_grid_channels(working_voxel, channels_to_show)
+    base_metadata = dict(working_voxel.metadata or {})
+
+    with torch.no_grad():
+        input_tensor = working_voxel.data.unsqueeze(0).to(device)
+        recon_logits, _, mu, _ = model(input_tensor)
+        recon_tensor = _apply_activation(recon_logits, reconstruction_type).squeeze(0).cpu().float()
+
+    print(f"Reconstruction range: [{recon_tensor.min():.4f}, {recon_tensor.max():.4f}] mean={recon_tensor.mean():.4f}")
+    reconstruction_voxel = VoxelGrid(
+        data=recon_tensor,
+        voxel_size=working_voxel.voxel_size,
+        channels=working_voxel.channels,
+        metadata={**base_metadata, 'generated_from': 'posterior_mean'}
+    )
+
+    perturbed_voxels: List[VoxelGrid] = []
+    with torch.no_grad():
+        for idx in range(num_samples):
+            noise = torch.randn_like(mu) * sigma
+            latent_sample = mu + noise
+            decoded_logits = model.decode(latent_sample)
+            decoded_tensor = _apply_activation(decoded_logits, reconstruction_type).squeeze(0).cpu().float()
+            print(f"Perturbation {idx}: range [{decoded_tensor.min():.4f}, {decoded_tensor.max():.4f}] mean={decoded_tensor.mean():.4f}")
+            metadata = {
+                **base_metadata,
+                'generated_from': 'posterior_perturbation',
+                'sigma': sigma,
+                'sample_index': idx,
+            }
+            perturbed_voxels.append(
+                VoxelGrid(
+                    data=decoded_tensor,
+                    voxel_size=working_voxel.voxel_size,
+                    channels=working_voxel.channels,
+                    metadata=metadata
+                )
+            )
+
+    print("Opening napari viewers for original, reconstruction, and perturbed samples...")
+    original_viewer = NapariViewer.view_structure(working_voxel)
+    try:
+        original_viewer.title = f"Original Structure {structure_idx}"
+    except AttributeError:  # pragma: no cover
+        original_viewer.window._qt_window.setWindowTitle(f"Original Structure {structure_idx}")
+
+    recon_viewer = NapariViewer.view_structure(reconstruction_voxel)
+    try:
+        recon_viewer.title = f"Reconstruction σ=0 (Structure {structure_idx})"
+    except AttributeError:  # pragma: no cover
+        recon_viewer.window._qt_window.setWindowTitle(f"Reconstruction σ=0 (Structure {structure_idx})")
+
+    perturb_viewers = []
+    for idx, voxel in enumerate(perturbed_voxels, start=1):
+        viewer = NapariViewer.view_structure(voxel)
+        try:
+            viewer.title = f"Perturb {idx}/{num_samples} σ={sigma:.3f} (Structure {structure_idx})"
+        except AttributeError:  # pragma: no cover
+            viewer.window._qt_window.setWindowTitle(f"Perturb {idx}/{num_samples} σ={sigma:.3f} (Structure {structure_idx})")
+        perturb_viewers.append(viewer)
+
+    import napari  # Local import to avoid dependency when not visualizing
+    napari.run()
+
+
+def validate_vae_from_experiment(
+    experiment_uuid: str,
+    structure_id = 0,  # Can be int or 'random'
+    device: str = 'auto'
+):
+    """Validate VAE reconstruction using experiment UUID (infers checkpoint and library).
+
+    Args:
+        experiment_uuid: UUID of the experiment
+        structure_id: Structure ID to validate (int or 'random')
+        device: Device to use ('auto', 'cpu', 'cuda', 'mps')
+    """
+    from frame.management import ExperimentManager
+    import json
+
+    print(f"Loading experiment {experiment_uuid}...")
+
+    # Load experiment
+    exp_mgr = ExperimentManager()
+    experiment = exp_mgr.get_experiment(experiment_uuid)
+
+    if experiment is None:
+        print(f"Error: Experiment {experiment_uuid} not found")
+        sys.exit(1)
+
+    print(f"Found experiment: {experiment.name} ({experiment.model_type})")
+
+    # Get best checkpoint
+    if not experiment.best_checkpoint:
+        print(f"Error: Experiment {experiment_uuid} has no best checkpoint set.")
+        print("Use 'frame checkpoint set-best' to mark one.")
+        sys.exit(1)
+
+    from frame.management import CheckpointManager
+    ckpt_mgr = CheckpointManager()
+    checkpoint = ckpt_mgr.get_checkpoint(experiment.path, experiment.best_checkpoint)
+
+    if checkpoint is None:
+        print(f"Error: Best checkpoint {experiment.best_checkpoint} not found")
+        sys.exit(1)
+
+    print(f"Using best checkpoint: {checkpoint.uuid}")
+    print(f"  Epoch: {checkpoint.epoch}, Step: {checkpoint.step}")
+    print(f"  Metrics: {checkpoint.metrics}")
+
+    # Get library UUID from experiment
+    library_refs_path = experiment.path / "library_refs.json"
+    if not library_refs_path.exists():
+        print(f"Error: Library references not found at {library_refs_path}")
+        sys.exit(1)
+
+    with open(library_refs_path, 'r') as f:
+        library_refs = json.load(f)
+
+    library_uuid = library_refs.get('primary')
+    if not library_uuid:
+        print(f"Error: No primary library reference found in {library_refs_path}")
+        sys.exit(1)
+
+    print(f"Using library: {library_uuid}")
+
+    # Resolve library path
+    library_path, _ = _resolve_library_path(library_uuid)
+    print(f"Library path: {library_path}")
+
+    # Call the existing validation function
+    validate_vae_reconstruction(
+        checkpoint_path=str(checkpoint.checkpoint_path),
+        voxel_library_path=str(library_path),
+        structure_id=structure_id,
+        device=device
+    )
+
+
 def validate_vae_reconstruction(
     checkpoint_path: str,
     voxel_library_path: str,
@@ -952,7 +1613,14 @@ def validate_vae_reconstruction(
     print("Reconstructing with VAE...")
     with torch.no_grad():
         recon_logits, _, _, _ = vae(voxel_data.unsqueeze(0))  # Add batch dimension
-        recon = torch.sigmoid(recon_logits) if use_sigmoid else recon_logits
+        if use_sigmoid:
+            # For bce_logits: use sigmoid
+            recon = torch.sigmoid(recon_logits)
+            print("Applied sigmoid activation (bce_logits)")
+        else:
+            # For fractional_ce, mse, l1: use softmax for proper simplex normalization
+            recon = torch.softmax(recon_logits, dim=1)
+            print("Applied softmax activation (fractional_ce/mse/l1)")
         reconstructed_data = recon.squeeze(0)  # Remove batch dimension
     
     # Create reconstructed VoxelGrid
@@ -1019,7 +1687,10 @@ viewer = NapariViewer.view_structure(
 )
 
 # Set window title
-viewer.window.qt_viewer.setWindowTitle("VAE Reconstructed Structure {structure_id}")
+try:
+    viewer.title = "VAE Reconstructed Structure {structure_id}"
+except AttributeError:  # pragma: no cover
+    viewer.window._qt_window.setWindowTitle("VAE Reconstructed Structure {structure_id}")
 
 # Run napari
 napari.run()
@@ -1037,7 +1708,10 @@ napari.run()
             opacity=0.25,
             empty_threshold=0.01
         )
-        original_viewer.window.qt_viewer.setWindowTitle(f"Original Structure {structure_id}")
+        try:
+            original_viewer.title = f"Original Structure {structure_id}"
+        except AttributeError:  # pragma: no cover
+            original_viewer.window._qt_window.setWindowTitle(f"Original Structure {structure_id}")
         
         # Start the subprocess for the reconstructed structure
         print("Opening reconstructed structure in separate napari window...")

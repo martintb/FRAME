@@ -10,7 +10,7 @@
 # - AdamW optimizer for better generalization
 
 [metadata]
-name = "lnp_vae_crop_fracce"
+name = "lnp_vae_crop_fracce_freebits"
 description = "VAE training with crop and fractional cross-entropy loss for LNP compression + generation"
 random_seed = 42
 
@@ -39,17 +39,17 @@ device = "mps"  # "cuda", "mps", or "cpu"
 distributed = false  # Set true for DDP
 num_epochs = 100
 num_workers = 0
-batch_size = 4  # May need to reduce to 2-3 due to larger base_channels
+batch_size = 32  # May need to reduce to 2-3 due to larger base_channels
 learning_rate = 2e-4
 optimizer = "adamw"  # AdamW for better generalization
 scheduler = "cosine"  # "cosine", "step", or "none"
 grad_clip = 1.0  # Gradient clipping value (0 to disable)
-kl_warmup_epochs = 5  # Fast warmup (was 15) - full KL weight by epoch 5
+kl_warmup_epochs = 20  # Fast warmup (was 15) - full KL weight by epoch 5
 
 [loss]
 reconstruction_weight = 1.0
-kl_weight = 0.005  # 5x stronger (was 0.001) to prevent collapse
-free_bits = 0.0  # Minimum KL per latent dimension (prevents per-dim collapse)
+kl_weight = 1.0  # 5x stronger (was 0.001) to prevent collapse
+free_bits = 0.5  # Minimum KL per latent dimension (prevents per-dim collapse)
 reconstruction_type = "fractional_ce"  # "mse" | "l1" | "bce_logits"
 mask_threshold = 0.0
 bg_weight = 0.0

@@ -135,7 +135,8 @@ class DDPMTrainer(BaseTrainer):
             training_config=config.training,
             logging_config=logging_config,
             checkpoint_manager=checkpoint_manager,
-            device=device
+            device=device,
+            full_config=config  # Pass full config for complete checkpoint saving
         )
         
         # Set experiment reference for interruption handling

@@ -588,14 +588,65 @@ def main():
             elif args.twin_command == "evaluate":
                 twin_cli.evaluate_model(args.config, args.checkpoint)
             elif args.twin_command == "validate-vae":
-                twin_cli.validate_vae_reconstruction(
-                    args.checkpoint, 
-                    args.voxel_library, 
-                    args.structure_id, 
-                    args.device
-                )
+                # Determine structure_id: use provided value, or random if not specified
+                structure_id = args.structure_id if args.structure_id is not None else 'random'
+
+                # Check if first argument is experiment UUID or checkpoint path
+                exp_or_ckpt = args.experiment_or_checkpoint
+                if exp_or_ckpt.startswith('exp_'):
+                    # New mode: experiment UUID
+                    twin_cli.validate_vae_from_experiment(
+                        experiment_uuid=exp_or_ckpt,
+                        structure_id=structure_id,
+                        device=args.device
+                    )
+                else:
+                    # Legacy mode: checkpoint path + library path
+                    if args.voxel_library is None:
+                        print("Error: When using checkpoint path, voxel_library argument is required")
+                        sys.exit(1)
+                    twin_cli.validate_vae_reconstruction(
+                        checkpoint_path=exp_or_ckpt,
+                        voxel_library_path=args.voxel_library,
+                        structure_id=structure_id,
+                        device=args.device
+                    )
             elif args.twin_command == "continue":
                 twin_cli.continue_training(args.experiment_uuid, args.config if hasattr(args, 'config') else None)
+            elif args.twin_command == "sample-prior":
+                try:
+                    channels = twin_cli._parse_channels_arg(args.channels)
+                except ValueError as exc:
+                    print(f"Error: {exc}")
+                    sys.exit(1)
+                twin_cli.sample_prior_from_experiment(
+                    experiment_uuid=args.experiment_uuid,
+                    device_choice=args.device,
+                    channels_to_show=channels
+                )
+            elif args.twin_command == "perturb-structure":
+                try:
+                    channels = twin_cli._parse_channels_arg(args.channels)
+                except ValueError as exc:
+                    print(f"Error: {exc}")
+                    sys.exit(1)
+                structure_id = args.structure_id if args.structure_id is not None else 'random'
+                if getattr(args, "random", False):
+                    structure_id = 'random'
+                if args.num_samples <= 0:
+                    print("Error: --num-samples must be positive")
+                    sys.exit(1)
+                if args.sigma < 0:
+                    print("Error: --sigma must be non-negative")
+                    sys.exit(1)
+                twin_cli.perturb_structure_from_experiment(
+                    experiment_uuid=args.experiment_uuid,
+                    structure_id=structure_id,
+                    device_choice=args.device,
+                    num_samples=args.num_samples,
+                    sigma=args.sigma,
+                    channels_to_show=channels
+                )
             else:
                 print(f"Unknown twin command: {args.twin_command}")
                 sys.exit(1)

@@ -30,7 +30,8 @@ class BaseTrainer:
         training_config: TrainingConfig,
         logging_config: LoggingConfig,
         checkpoint_manager: CheckpointManager,
-        device: torch.device
+        device: torch.device,
+        full_config: Optional[Any] = None
     ):
         self.model = model
         self.train_loader = train_loader
@@ -42,6 +43,7 @@ class BaseTrainer:
         self.logging_config = logging_config
         self.checkpoint_manager = checkpoint_manager
         self.device = device
+        self.full_config = full_config  # Store full config for checkpointing
         
         # Move model to device
         self.model.to(device)
@@ -450,21 +452,38 @@ class BaseTrainer:
     
     def _save_checkpoint(self, train_metrics: Dict[str, float], val_metrics: Dict[str, float], is_best: bool):
         """Save training checkpoint."""
-        # Get model configuration from the model itself
-        model_config = self._get_model_config()
-        
-        # Get loss configuration from the loss function
-        loss_config = self._get_loss_config()
-        
-        config_dict = {
-            'training': self.training_config.dict(),
-            'logging': self.logging_config.dict(),
-            'model': model_config,
-            'loss': loss_config
-        }
-        
+        # Use full config if available, otherwise fall back to partial config
+        if self.full_config is not None:
+            # Convert full config to dict (supports both pydantic models and dicts)
+            if hasattr(self.full_config, 'dict'):
+                config_dict = self.full_config.dict()
+            elif hasattr(self.full_config, 'model_dump'):
+                config_dict = self.full_config.model_dump()
+            elif isinstance(self.full_config, dict):
+                config_dict = self.full_config
+            else:
+                # Fallback to partial config
+                model_config = self._get_model_config()
+                loss_config = self._get_loss_config()
+                config_dict = {
+                    'training': self.training_config.dict(),
+                    'logging': self.logging_config.dict(),
+                    'model': model_config,
+                    'loss': loss_config
+                }
+        else:
+            # Fallback to partial config for backward compatibility
+            model_config = self._get_model_config()
+            loss_config = self._get_loss_config()
+            config_dict = {
+                'training': self.training_config.dict(),
+                'logging': self.logging_config.dict(),
+                'model': model_config,
+                'loss': loss_config
+            }
+
         metrics = {**train_metrics, **val_metrics}
-        
+
         self.checkpoint_manager.save_checkpoint(
             model=self.model,
             optimizer=self.optimizer,
