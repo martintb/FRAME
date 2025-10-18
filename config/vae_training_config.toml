@@ -10,7 +10,7 @@
 # - AdamW optimizer for better generalization
 
 [metadata]
-name = "lnp_vae_10k_10ch_lhs_fracce_freebits"
+name = "lnp_vae_10k_highklbeta_lowfreebits"
 description = "VAE training with crop and fractional cross-entropy loss for LNP compression + generation"
 random_seed = 42
 
@@ -34,11 +34,19 @@ channel_schedule = [16, 32, 64]  # Channel sizes at each level (inferred levels 
 # Alternatively, use legacy params: base_channels = 32, levels = 2
 norm_groups = 8  # Number of groups for GroupNorm (UNetVAE only)
 
+# Variance modeling strategy (controls how the encoder predicts variance)
+# Options:
+#   "learned": Full spatial logvar prediction (default, most flexible)
+#   "fixed": Constant logvar (fast, simple, good for compression)
+#   "scalar": Single learnable parameter for all positions (compromise)
+logvar_mode = "learned"
+fixed_logvar_value = 0.0  # Only used when logvar_mode = "fixed" (0.0 means std=1.0)
+
 [training]
 device = "mps"  # "cuda", "mps", or "cpu"
 distributed = false  # Set true for DDP
-num_epochs = 100
-num_workers = 0
+num_epochs = 200
+num_workers = 2
 batch_size = 32  # May need to reduce to 2-3 due to larger base_channels
 learning_rate = 2e-4
 optimizer = "adamw"  # AdamW for better generalization
@@ -53,8 +61,8 @@ kl_cyclical_ratio = 0.5  # For cyclical strategy: fraction of cycle spent increa
 
 [loss]
 reconstruction_weight = 1.0
-kl_weight = 1.0  # 5x stronger (was 0.001) to prevent collapse
-free_bits = 0.5  # Minimum KL per latent dimension (prevents per-dim collapse)
+kl_weight = 2.0  # 
+free_bits = 0.1  # Minimum KL per latent dimension (prevents per-dim collapse)
 reconstruction_type = "fractional_ce"  # "mse" | "l1" | "bce_logits"
 mask_threshold = 0.0
 bg_weight = 0.0
@@ -71,3 +79,5 @@ save_best = true  # Save best validation loss
 [logging]
 log_every_steps = 25
 n_recon_compare = 25  # More frequent reconstruction comparisons
+n_analyze_latent = 125  # Analyze latent space every N steps (0=disabled)
+max_latent_analysis_samples = 16  # Max samples for latent histograms

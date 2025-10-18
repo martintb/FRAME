@@ -1034,6 +1034,8 @@ def _create_model_from_checkpoint(experiment, checkpoint_data, device: torch.dev
         vae_kwargs = {
             'input_channels': input_channels,
             'latent_channels': latent_channels,
+            'logvar_mode': model_config.get('logvar_mode', 'learned'),
+            'fixed_logvar_value': model_config.get('fixed_logvar_value', 0.0),
         }
         if channel_schedule is not None:
             vae_kwargs['channel_schedule'] = channel_schedule
@@ -1046,6 +1048,8 @@ def _create_model_from_checkpoint(experiment, checkpoint_data, device: torch.dev
             'latent_channels': latent_channels,
             'norm_groups': model_config.get('norm_groups', 8),
             'skip_dropout_prob': model_config.get('skip_dropout_prob', 0.1),
+            'logvar_mode': model_config.get('logvar_mode', 'learned'),
+            'fixed_logvar_value': model_config.get('fixed_logvar_value', 0.0),
         }
         if channel_schedule is not None:
             unet_kwargs['channel_schedule'] = channel_schedule
@@ -1581,7 +1585,9 @@ def validate_vae_reconstruction(
             base_channels=vae_config['base_channels'],
             levels=vae_config['levels'],
             norm_groups=vae_config.get('norm_groups', 8),
-            skip_dropout_prob=vae_config.get('skip_dropout_prob', 0.0)
+            skip_dropout_prob=vae_config.get('skip_dropout_prob', 0.0),
+            logvar_mode=vae_config.get('logvar_mode', 'learned'),
+            fixed_logvar_value=vae_config.get('fixed_logvar_value', 0.0)
         )
         print("Using UNetVAE model")
     else:
@@ -1590,7 +1596,9 @@ def validate_vae_reconstruction(
             input_channels=vae_config['input_channels'],
             latent_channels=vae_config['latent_channels'],
             base_channels=vae_config['base_channels'],
-            levels=vae_config['levels']
+            levels=vae_config['levels'],
+            logvar_mode=vae_config.get('logvar_mode', 'learned'),
+            fixed_logvar_value=vae_config.get('fixed_logvar_value', 0.0)
         )
         print("Using regular VAE model")
     vae.load_state_dict(checkpoint['model_state_dict'])

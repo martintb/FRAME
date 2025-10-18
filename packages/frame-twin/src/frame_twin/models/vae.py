@@ -7,11 +7,32 @@ from typing import Tuple, Optional, List
 
 
 class Encoder3D(nn.Module):
-    """3D VAE Encoder using simple convolutional architecture."""
+    """3D VAE Encoder using simple convolutional architecture.
+    
+    Args:
+        in_channels: Number of input channels
+        latent_channels: Number of latent channels
+        channel_schedule: List of channel sizes at each level
+        logvar_mode: Variance modeling strategy
+            - "learned": Full spatial logvar prediction (default)
+            - "fixed": Fixed constant logvar
+            - "scalar": Single learnable scalar logvar
+        fixed_logvar_value: Log-variance value when logvar_mode="fixed"
+    """
 
-    def __init__(self, in_channels: int, latent_channels: int, channel_schedule: List[int]):
+    def __init__(
+        self, 
+        in_channels: int, 
+        latent_channels: int, 
+        channel_schedule: List[int],
+        logvar_mode: str = "learned",
+        fixed_logvar_value: float = 0.0
+    ):
         super().__init__()
         self.channel_schedule = channel_schedule
+        self.logvar_mode = logvar_mode
+        self.fixed_logvar_value = fixed_logvar_value
+        
         self.in_conv = nn.Conv3d(in_channels, channel_schedule[0], kernel_size=3, padding=1)
         blocks = []
         for i in range(len(channel_schedule)):
@@ -27,13 +48,31 @@ class Encoder3D(nn.Module):
         self.down = nn.Sequential(*blocks)
         final_channels = channel_schedule[-1]
         self.mu = nn.Conv3d(final_channels, latent_channels, kernel_size=1)
-        self.logvar = nn.Conv3d(final_channels, latent_channels, kernel_size=1)
+        
+        # Initialize logvar prediction based on mode
+        if self.logvar_mode == "learned":
+            # Full spatial logvar prediction
+            self.logvar = nn.Conv3d(final_channels, latent_channels, kernel_size=1)
+        elif self.logvar_mode == "scalar":
+            # Single learnable scalar parameter
+            self.logvar_param = nn.Parameter(torch.zeros(1))
+        # For "fixed" mode, no learnable parameter needed
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         h = self.in_conv(x)
         h = self.down(h)
         mu = self.mu(h)
-        logvar = self.logvar(h)
+        
+        # Compute logvar based on mode
+        if self.logvar_mode == "learned":
+            logvar = self.logvar(h)
+        elif self.logvar_mode == "scalar":
+            # Broadcast scalar parameter to match mu shape
+            logvar = self.logvar_param.expand_as(mu)
+        else:  # fixed
+            # Use fixed constant value
+            logvar = torch.full_like(mu, self.fixed_logvar_value)
+        
         std = torch.exp(0.5 * logvar)
         eps = torch.randn_like(std)
         z = mu + eps * std
@@ -73,7 +112,17 @@ class Decoder3D(nn.Module):
 
 
 class VAE(nn.Module):
-    """3D Variational Autoencoder using simple convolutional architecture."""
+    """3D Variational Autoencoder using simple convolutional architecture.
+    
+    Args:
+        input_channels: Number of input channels
+        latent_channels: Number of latent channels
+        channel_schedule: List of channel sizes at each level
+        base_channels: (Deprecated) Base channel count
+        levels: (Deprecated) Number of downsampling levels
+        logvar_mode: Variance modeling strategy ("learned", "fixed", or "scalar")
+        fixed_logvar_value: Log-variance value when logvar_mode="fixed"
+    """
 
     def __init__(
         self,
@@ -81,12 +130,16 @@ class VAE(nn.Module):
         latent_channels: int,
         channel_schedule: Optional[List[int]] = None,
         base_channels: Optional[int] = None,  # Deprecated, for backward compatibility
-        levels: Optional[int] = None  # Deprecated, for backward compatibility
+        levels: Optional[int] = None,  # Deprecated, for backward compatibility
+        logvar_mode: str = "learned",
+        fixed_logvar_value: float = 0.0
     ):
         super().__init__()
 
         self.input_channels = input_channels
         self.latent_channels = latent_channels
+        self.logvar_mode = logvar_mode
+        self.fixed_logvar_value = fixed_logvar_value
 
         # Support backward compatibility with base_channels and levels
         if channel_schedule is None:
@@ -101,7 +154,13 @@ class VAE(nn.Module):
         # Track latent spatial size (inferred from first forward pass)
         self.latent_spatial_size: Optional[int] = None
 
-        self.encoder = Encoder3D(input_channels, latent_channels, channel_schedule)
+        self.encoder = Encoder3D(
+            input_channels, 
+            latent_channels, 
+            channel_schedule,
+            logvar_mode=logvar_mode,
+            fixed_logvar_value=fixed_logvar_value
+        )
         self.decoder = Decoder3D(input_channels, latent_channels, channel_schedule)
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:

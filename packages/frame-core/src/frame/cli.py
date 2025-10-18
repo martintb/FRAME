@@ -93,7 +93,8 @@ def setup_checkpoint_commands(subparsers):
     # Set best checkpoint
     best_parser = ckpt_subparsers.add_parser("set-best", help="Mark checkpoint as best")
     best_parser.add_argument("experiment_uuid", help="Experiment UUID")
-    best_parser.add_argument("checkpoint_uuid", help="Checkpoint UUID")
+    best_parser.add_argument("checkpoint_uuid", nargs="?", default=None, help="Checkpoint UUID (optional if --last is used)")
+    best_parser.add_argument("--last", action="store_true", help="Use the last (most recent) checkpoint")
 
 
 def setup_tensorboard_command(subparsers):
@@ -320,8 +321,26 @@ def handle_checkpoint_commands(args):
                 print(f"    {key}: {value}")
     
     elif args.checkpoint_command == "set-best":
-        experiment.set_best_checkpoint(args.checkpoint_uuid)
-        print(f"Marked {args.checkpoint_uuid} as best checkpoint")
+        # Determine which checkpoint to use
+        if args.last:
+            # Get the last checkpoint
+            checkpoints = ckpt_mgr.list_checkpoints(experiment.path)
+            
+            if not checkpoints:
+                print(f"No checkpoints found for experiment {args.experiment_uuid}")
+                sys.exit(1)
+            
+            last_checkpoint = checkpoints[-1]  # Last one (sorted by step)
+            checkpoint_uuid = last_checkpoint.uuid
+            print(f"Using last checkpoint: {checkpoint_uuid} (epoch {last_checkpoint.epoch}, step {last_checkpoint.step})")
+        elif args.checkpoint_uuid:
+            checkpoint_uuid = args.checkpoint_uuid
+        else:
+            print("Error: Must provide either checkpoint_uuid or --last flag")
+            sys.exit(1)
+        
+        experiment.set_best_checkpoint(checkpoint_uuid)
+        print(f"Marked {checkpoint_uuid} as best checkpoint")
 
 
 def handle_tensorboard_command(args):

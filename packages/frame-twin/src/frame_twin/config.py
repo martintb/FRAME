@@ -46,6 +46,10 @@ class VAEModelConfig(BaseModel):
     channel_schedule: Optional[List[int]] = Field(None, description="List of channel sizes at each level (e.g., [32, 64, 128, 256])")
     norm_groups: int = Field(8, gt=0)  # Number of groups for GroupNorm (UNetVAE only)
     skip_dropout_prob: float = Field(0.0, ge=0.0, le=1.0, description="Probability of dropping skip connections during training (UNetVAE only)")
+    
+    # Logvar strategy
+    logvar_mode: Literal["learned", "fixed", "scalar"] = Field("learned", description="Variance modeling: 'learned' (full spatial), 'fixed' (constant), 'scalar' (single learnable parameter)")
+    fixed_logvar_value: float = Field(0.0, description="Fixed log-variance value when logvar_mode='fixed' (0.0 corresponds to std=1.0)")
 
     @validator('channel_schedule')
     def validate_channel_schedule(cls, v, values):
@@ -170,6 +174,8 @@ class LoggingConfig(BaseModel):
     log_every_steps: int = Field(gt=0)
     tensorboard_dir: Optional[str] = None  # Will be set to experiment's log directory
     n_recon_compare: Optional[int] = Field(0, ge=0)  # Log reconstruction comparison every N steps
+    n_analyze_latent: Optional[int] = Field(0, ge=0)  # Analyze latent space every N steps (0=disabled)
+    max_latent_analysis_samples: int = Field(128, gt=0)  # Max samples for latent histograms
 
 
 class SamplingConfig(BaseModel):

@@ -88,18 +88,34 @@ class UpBlock3D(nn.Module):
 
 
 class EncoderUNet3D(nn.Module):
-    """UNet-style encoder with skip connections for VAE."""
+    """UNet-style encoder with skip connections for VAE.
+    
+    Args:
+        in_channels: Number of input channels
+        latent_channels: Number of latent channels
+        channel_schedule: List of channel sizes at each level
+        norm_groups: Number of groups for GroupNorm
+        logvar_mode: Variance modeling strategy
+            - "learned": Full spatial logvar prediction (default)
+            - "fixed": Fixed constant logvar
+            - "scalar": Single learnable scalar logvar
+        fixed_logvar_value: Log-variance value when logvar_mode="fixed"
+    """
 
     def __init__(
         self,
         in_channels: int,
         latent_channels: int,
         channel_schedule: List[int],
-        norm_groups: int = 8
+        norm_groups: int = 8,
+        logvar_mode: str = "learned",
+        fixed_logvar_value: float = 0.0
     ):
         super().__init__()
         self.channel_schedule = channel_schedule
         self.levels = len(channel_schedule)
+        self.logvar_mode = logvar_mode
+        self.fixed_logvar_value = fixed_logvar_value
 
         # Initial convolution
         self.in_conv = nn.Conv3d(in_channels, channel_schedule[0], kernel_size=3, padding=1)
@@ -117,7 +133,15 @@ class EncoderUNet3D(nn.Module):
 
         # Latent projection (mu and logvar)
         self.mu = nn.Conv3d(final_channels, latent_channels, kernel_size=1)
-        self.logvar = nn.Conv3d(final_channels, latent_channels, kernel_size=1)
+        
+        # Initialize logvar prediction based on mode
+        if self.logvar_mode == "learned":
+            # Full spatial logvar prediction
+            self.logvar = nn.Conv3d(final_channels, latent_channels, kernel_size=1)
+        elif self.logvar_mode == "scalar":
+            # Single learnable scalar parameter
+            self.logvar_param = nn.Parameter(torch.zeros(1))
+        # For "fixed" mode, no learnable parameter needed
     
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, List[torch.Tensor]]:
         """Returns (z, mu, logvar, skips) where skips are from encoder path."""
@@ -134,7 +158,16 @@ class EncoderUNet3D(nn.Module):
         
         # Latent distribution
         mu = self.mu(h)
-        logvar = self.logvar(h)
+        
+        # Compute logvar based on mode
+        if self.logvar_mode == "learned":
+            logvar = self.logvar(h)
+        elif self.logvar_mode == "scalar":
+            # Broadcast scalar parameter to match mu shape
+            logvar = self.logvar_param.expand_as(mu)
+        else:  # fixed
+            # Use fixed constant value
+            logvar = torch.full_like(mu, self.fixed_logvar_value)
         
         # Reparameterization trick
         std = torch.exp(0.5 * logvar)
@@ -199,7 +232,19 @@ class DecoderUNet3D(nn.Module):
 
 
 class UNetVAE(nn.Module):
-    """3D UNet-based Variational Autoencoder with skip connections for better edge preservation."""
+    """3D UNet-based Variational Autoencoder with skip connections for better edge preservation.
+    
+    Args:
+        input_channels: Number of input channels
+        latent_channels: Number of latent channels
+        channel_schedule: List of channel sizes at each level
+        base_channels: (Deprecated) Base channel count
+        levels: (Deprecated) Number of downsampling levels
+        norm_groups: Number of groups for GroupNorm
+        skip_dropout_prob: Probability of dropping skip connections during training
+        logvar_mode: Variance modeling strategy ("learned", "fixed", or "scalar")
+        fixed_logvar_value: Log-variance value when logvar_mode="fixed"
+    """
 
     def __init__(
         self,
@@ -209,12 +254,16 @@ class UNetVAE(nn.Module):
         base_channels: Optional[int] = None,  # Deprecated, for backward compatibility
         levels: Optional[int] = None,  # Deprecated, for backward compatibility
         norm_groups: int = 8,
-        skip_dropout_prob: float = 0.0
+        skip_dropout_prob: float = 0.0,
+        logvar_mode: str = "learned",
+        fixed_logvar_value: float = 0.0
     ):
         super().__init__()
 
         self.input_channels = input_channels
         self.latent_channels = latent_channels
+        self.logvar_mode = logvar_mode
+        self.fixed_logvar_value = fixed_logvar_value
 
         # Support backward compatibility with base_channels and levels
         if channel_schedule is None:
@@ -232,7 +281,12 @@ class UNetVAE(nn.Module):
         self.latent_spatial_size: Optional[int] = None
 
         self.encoder = EncoderUNet3D(
-            input_channels, latent_channels, channel_schedule, norm_groups
+            input_channels, 
+            latent_channels, 
+            channel_schedule, 
+            norm_groups,
+            logvar_mode=logvar_mode,
+            fixed_logvar_value=fixed_logvar_value
         )
         self.decoder = DecoderUNet3D(
             input_channels, latent_channels, channel_schedule, norm_groups

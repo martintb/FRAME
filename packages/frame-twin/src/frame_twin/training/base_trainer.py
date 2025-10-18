@@ -149,7 +149,14 @@ class BaseTrainer:
 
             # Forward pass
             self.optimizer.zero_grad()
-            loss, metrics = self._compute_loss(batch)
+            compute_result = self._compute_loss(batch)
+            
+            # Handle optional latent tuple return (VAE trainer returns 3 values, others return 2)
+            if len(compute_result) == 3:
+                loss, metrics, latent_tuple = compute_result
+            else:
+                loss, metrics = compute_result
+                latent_tuple = None
 
             # Backward pass
             loss.backward()
@@ -180,6 +187,18 @@ class BaseTrainer:
                     except Exception:
                         # Avoid crashing training due to visualization
                         pass
+            
+            # Periodic latent space analysis (VAE only)
+            if getattr(self.logging_config, 'n_analyze_latent', 0):
+                n_al = self.logging_config.n_analyze_latent or 0
+                if n_al > 0 and (self.global_step % n_al == 0) and latent_tuple is not None:
+                    if hasattr(self, '_log_latent_analysis'):
+                        try:
+                            self._log_latent_analysis(latent_tuple, step=self.global_step)
+                        except Exception as e:
+                            # Avoid crashing training due to latent analysis
+                            print(f"Warning: Latent analysis failed: {e}")
+                            pass
 
             # Update progress bar
             progress_bar.set_postfix({
@@ -221,7 +240,14 @@ class BaseTrainer:
                 batch = self._move_batch_to_device(batch)
 
                 # Forward pass
-                loss, metrics = self._compute_loss(batch)
+                compute_result = self._compute_loss(batch)
+                
+                # Handle optional latent tuple return (VAE trainer returns 3 values, others return 2)
+                if len(compute_result) == 3:
+                    loss, metrics, latent_tuple = compute_result
+                else:
+                    loss, metrics = compute_result
+                    latent_tuple = None
 
                 # Update metrics
                 epoch_metrics['val_loss'] += loss.item()
@@ -236,6 +262,18 @@ class BaseTrainer:
                         except Exception:
                             # Avoid crashing training due to visualization
                             pass
+                
+                # Periodic latent space analysis (VAE only)
+                if getattr(self.logging_config, 'n_analyze_latent', 0):
+                    n_al = self.logging_config.n_analyze_latent or 0
+                    if n_al > 0 and (self.global_step % n_al == 0) and latent_tuple is not None:
+                        if hasattr(self, '_log_latent_analysis'):
+                            try:
+                                self._log_latent_analysis(latent_tuple, step=self.global_step)
+                            except Exception as e:
+                                # Avoid crashing training due to latent analysis
+                                print(f"Warning: Latent analysis failed: {e}")
+                                pass
 
                 # Explicitly free memory
                 del loss, batch

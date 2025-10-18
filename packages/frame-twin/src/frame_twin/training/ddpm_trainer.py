@@ -40,15 +40,18 @@ class DDPMTrainer(BaseTrainer):
                 base_channels=vae_config['base_channels'],
                 levels=vae_config['levels'],
                 norm_groups=vae_config.get('norm_groups', 8),
-                skip_dropout_prob=vae_config.get('skip_dropout_prob', 0.0)
+                skip_dropout_prob=vae_config.get('skip_dropout_prob', 0.0),
+                logvar_mode=vae_config.get('logvar_mode', 'learned'),
+                fixed_logvar_value=vae_config.get('fixed_logvar_value', 0.0)
             )
         else:  # 'vae'
             vae = VAE(
                 input_channels=vae_config['input_channels'],
-                latent_dim=vae_config['latent_dim'],
-                latent_spatial_size=tuple(vae_config['latent_spatial_size']),
-                encoder_channels=vae_config['encoder_channels'],
-                decoder_channels=vae_config['decoder_channels']
+                latent_channels=vae_config['latent_channels'],
+                base_channels=vae_config['base_channels'],
+                levels=vae_config['levels'],
+                logvar_mode=vae_config.get('logvar_mode', 'learned'),
+                fixed_logvar_value=vae_config.get('fixed_logvar_value', 0.0)
             )
         
         vae.load_state_dict(vae_checkpoint['model_state_dict'])

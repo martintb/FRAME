@@ -22,7 +22,9 @@ class VAETrainer(BaseTrainer):
                 latent_channels=config.model.latent_channels,
                 channel_schedule=config.model.channel_schedule,
                 base_channels=config.model.base_channels,
-                levels=config.model.levels
+                levels=config.model.levels,
+                logvar_mode=config.model.logvar_mode,
+                fixed_logvar_value=config.model.fixed_logvar_value
             )
         elif config.model.type == "unet_vae":
             from ..models import UNetVAE
@@ -33,7 +35,9 @@ class VAETrainer(BaseTrainer):
                 base_channels=config.model.base_channels,
                 levels=config.model.levels,
                 norm_groups=config.model.norm_groups,
-                skip_dropout_prob=config.model.skip_dropout_prob
+                skip_dropout_prob=config.model.skip_dropout_prob,
+                logvar_mode=config.model.logvar_mode,
+                fixed_logvar_value=config.model.fixed_logvar_value
             )
         else:
             raise ValueError(f"Unknown model type: {config.model.type}")
@@ -134,15 +138,21 @@ class VAETrainer(BaseTrainer):
         self.train_loader = train_loader
         self.val_loader = val_loader
     
-    def _compute_loss(self, batch: Dict[str, Any]) -> tuple[torch.Tensor, Dict[str, float]]:
-        """Compute VAE loss for a batch."""
+    def _compute_loss(self, batch: Dict[str, Any]) -> tuple[torch.Tensor, Dict[str, float], tuple]:
+        """Compute VAE loss for a batch.
+        
+        Returns:
+            total_loss: Scalar loss for backprop
+            metrics: Dictionary of metrics to log
+            latent_tuple: (z, mu, logvar) tensors for latent analysis
+        """
         voxels = batch['voxels']  # Shape: (B, C, D, H, W)
         
         # Forward pass
         x_recon, z, mu, logvar = self.model(voxels)
         
         # Compute loss components
-        total_loss_static, recon_loss, kl_loss, data_recon, bg_penalty, edge_loss = self.loss_fn(x_recon, voxels, mu, logvar)
+        total_loss_static, recon_loss, kl_loss, data_recon, bg_penalty, edge_loss, kl_total = self.loss_fn(x_recon, voxels, mu, logvar)
 
         # Apply KL warmup by recomputing total loss with dynamic KL weight
         current_kl_weight = self._current_kl_weight()
@@ -156,10 +166,11 @@ class VAETrainer(BaseTrainer):
             'bg_penalty': bg_penalty.item(),
             'edge_loss': edge_loss.item(),
             'kl_loss': kl_loss.item(),
+            'kl_total': kl_total.item(),
             'kl_weight': float(current_kl_weight),
         }
         
-        return total_loss, metrics
+        return total_loss, metrics, (z, mu, logvar)
 
     def _current_kl_weight(self) -> float:
         """Compute current KL weight with optional warmup or cyclical annealing."""
@@ -195,6 +206,76 @@ class VAETrainer(BaseTrainer):
             # Linear schedule from 0 to base_weight over warmup_epochs
             progress = min(1.0, max(0.0, (self.current_epoch + 1) / float(warmup_epochs)))
             return base_weight * progress
+    
+    def _log_latent_analysis(self, latent_tuple: tuple, step: int):
+        """Log comprehensive latent space analysis to TensorBoard.
+        
+        Args:
+            latent_tuple: (z, mu, logvar) tensors with shape (B, C, D, H, W)
+            step: Current global step
+        """
+        if self.writer is None:
+            return
+        
+        z, mu, logvar = latent_tuple
+        
+        with torch.no_grad():
+            # Average over spatial dimensions (D, H, W) -> (B, C)
+            mu_c = mu.mean(dim=(2, 3, 4))
+            std_c = (0.5 * logvar).exp().mean(dim=(2, 3, 4))
+            z_c = z.mean(dim=(2, 3, 4))
+            
+            # Subsample batch if too large
+            B, C = mu_c.shape
+            max_samples = self.config.logging.max_latent_analysis_samples
+            if B > max_samples:
+                indices = torch.randperm(B)[:max_samples]
+                mu_c = mu_c[indices]
+                std_c = std_c[indices]
+                z_c = z_c[indices]
+                B = max_samples
+            
+            # Log overall histograms
+            self.writer.add_histogram("latent/mu_all", mu_c.detach().cpu().flatten(), step)
+            self.writer.add_histogram("latent/std_all", std_c.detach().cpu().flatten(), step)
+            self.writer.add_histogram("latent/z_all", z_c.detach().cpu().flatten(), step)
+            
+            # Per-channel histograms (first 8 dimensions)
+            max_dims_to_log = min(C, 8)
+            for i in range(max_dims_to_log):
+                self.writer.add_histogram(f"latent/mu_dim_{i}", mu_c[:, i].detach().cpu(), step)
+                self.writer.add_histogram(f"latent/std_dim_{i}", std_c[:, i].detach().cpu(), step)
+                self.writer.add_histogram(f"latent/z_dim_{i}", z_c[:, i].detach().cpu(), step)
+            
+            # Per-dim KL divergence
+            kl_per_dim = 0.5 * (mu_c.pow(2) + std_c.pow(2) - 1.0 - (2 * std_c.log()))
+            self.writer.add_histogram("latent/kl_per_dim", kl_per_dim.detach().cpu().flatten(), step)
+            self.writer.add_scalar("latent/kl_total_nats", kl_per_dim.sum(dim=1).mean().item(), step)
+            
+            # Z norm distribution
+            z_norm = z_c.norm(dim=1)  # (B,)
+            self.writer.add_histogram("latent/z_norm", z_norm.detach().cpu(), step)
+            
+            # Summary statistics
+            self.writer.add_scalar("latent/mu_mean", mu_c.mean().item(), step)
+            self.writer.add_scalar("latent/mu_std", mu_c.std().item(), step)
+            self.writer.add_scalar("latent/std_mean", std_c.mean().item(), step)
+            
+            # PCA scatter plot
+            Z = z_c.detach().cpu()  # (B, C)
+            Zc = Z - Z.mean(0, keepdim=True)
+            U, S, Vt = torch.linalg.svd(Zc, full_matrices=False)
+            Z2 = Zc @ Vt[:2].T  # (B, 2)
+            
+            import matplotlib.pyplot as plt
+            fig = plt.figure(figsize=(3.2, 3.2))
+            ax = fig.add_subplot(111)
+            ax.scatter(Z2[:, 0].numpy(), Z2[:, 1].numpy(), s=6, alpha=0.6)
+            ax.set_title("Posterior z: PCA")
+            ax.set_xlabel("PC1")
+            ax.set_ylabel("PC2")
+            self.writer.add_figure("latent/pca_scatter", fig, step)
+            plt.close(fig)
     
     def train(self, start_epoch: int = 0) -> None:
         """Train the VAE model."""

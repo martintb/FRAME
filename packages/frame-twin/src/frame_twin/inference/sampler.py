@@ -64,7 +64,9 @@ class Sampler:
                 base_channels=vae_config['base_channels'],
                 levels=vae_config['levels'],
                 norm_groups=vae_config.get('norm_groups', 8),
-                skip_dropout_prob=vae_config.get('skip_dropout_prob', 0.0)
+                skip_dropout_prob=vae_config.get('skip_dropout_prob', 0.0),
+                logvar_mode=vae_config.get('logvar_mode', 'learned'),
+                fixed_logvar_value=vae_config.get('fixed_logvar_value', 0.0)
             )
         else:
             print(f"Loading regular VAE model from {vae_path}")
@@ -72,7 +74,9 @@ class Sampler:
                 input_channels=vae_config['input_channels'],
                 latent_channels=vae_config['latent_channels'],
                 base_channels=vae_config['base_channels'],
-                levels=vae_config['levels']
+                levels=vae_config['levels'],
+                logvar_mode=vae_config.get('logvar_mode', 'learned'),
+                fixed_logvar_value=vae_config.get('fixed_logvar_value', 0.0)
             )
         vae.load_state_dict(vae_checkpoint['model_state_dict'])
         

@@ -187,7 +187,7 @@ class VAELoss(nn.Module):
         x: torch.Tensor,
         mean: torch.Tensor,
         logvar: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Compute VAE loss.
 
@@ -204,6 +204,7 @@ class VAELoss(nn.Module):
             data_recon: Data reconstruction loss (for logging)
             bg_penalty: Background penalty (for logging)
             edge_loss_val: Edge loss (for logging)
+            kl_total: Total KL divergence per sample (for logging)
         """
         # Reconstruction loss (always compute for logging, even if weight is zero)
         data_recon = self._recon_loss(x_recon, x)
@@ -227,21 +228,23 @@ class VAELoss(nn.Module):
             edge_loss_val = self._edge_loss(x_recon, x)
             recon_loss = recon_loss + self.edge_weight * edge_loss_val
 
+        # Compute KL per dimension for both logging and loss computation
+        kl_per_dim = -0.5 * (1 + logvar - mean.pow(2) - logvar.exp())
+        
+        # Compute total KL per sample for logging
+        kl_total = kl_per_dim.sum(dim=1).mean()
+
         # KL divergence loss with optional free bits constraint
         if self.free_bits is not None and self.free_bits > 0:
             # Free bits: ensure each latent dimension contributes at least free_bits nats
             # This prevents individual dimensions from collapsing to zero
-            # KL per dimension: -0.5 * (1 + logvar - mean^2 - exp(logvar))
-            kl_per_dim = -0.5 * (1 + logvar - mean.pow(2) - logvar.exp())
-
-            # Clamp each dimension's KL to be at least free_bits
             # Shape: (B, C, D, H, W) -> sum over spatial dims, clamp, then mean over batch and channels
             kl_per_dim_spatial = kl_per_dim.mean(dim=(2, 3, 4))  # (B, C)
             kl_clamped = torch.clamp(kl_per_dim_spatial, min=self.free_bits)
             kl_loss = kl_clamped.mean()
         else:
             # Standard KL loss - mean reduction
-            kl_loss = -0.5 * torch.mean(1 + logvar - mean.pow(2) - logvar.exp())
+            kl_loss = kl_per_dim.mean()
 
         # Total loss - only include terms with non-zero weights
         total_loss = torch.tensor(0.0, device=x_recon.device)
@@ -251,4 +254,4 @@ class VAELoss(nn.Module):
             total_loss = total_loss + self.kl_weight * kl_loss
 
         # Return detailed components for logging
-        return total_loss, recon_loss, kl_loss, data_recon.detach(), bg_penalty.detach(), edge_loss_val.detach()
+        return total_loss, recon_loss, kl_loss, data_recon.detach(), bg_penalty.detach(), edge_loss_val.detach(), kl_total.detach()
