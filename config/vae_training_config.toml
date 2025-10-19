@@ -10,8 +10,8 @@
 # - AdamW optimizer for better generalization
 
 [metadata]
-name = "lnp_vae_10k_highklbeta_lowfreebits"
-description = "VAE training with crop and fractional cross-entropy loss for LNP compression + generation"
+name = "lnp_vae_10k_vampprior"
+description = "VAE training"
 random_seed = 42
 
 [data]
@@ -29,7 +29,7 @@ random_rotation = true  # Apply random 90-degree rotations and flips
 [model]
 type = "vae"  # "vae" or "unet_vae"
 input_channels = 10  # Number of material channels
-latent_channels = 16  # Small latent space dimension
+latent_channels = 16 # Small latent space dimension
 channel_schedule = [16, 32, 64]  # Channel sizes at each level (inferred levels = 2)
 # Alternatively, use legacy params: base_channels = 32, levels = 2
 norm_groups = 8  # Number of groups for GroupNorm (UNetVAE only)
@@ -41,6 +41,14 @@ norm_groups = 8  # Number of groups for GroupNorm (UNetVAE only)
 #   "scalar": Single learnable parameter for all positions (compromise)
 logvar_mode = "learned"
 fixed_logvar_value = 0.0  # Only used when logvar_mode = "fixed" (0.0 means std=1.0)
+
+# VampPrior configuration (Variational Mixture of Posteriors Prior)
+# Replaces standard N(0,I) prior with learnable mixture of K posteriors in latent space
+# Can improve VAE performance and prevent posterior collapse
+use_vampprior = true  # Enable/disable VampPrior
+vampprior_num_components = 128  # Number of mixture components (K) - memory efficient for 3D
+vampprior_chunk_size = 32  # Chunk size for logsumexp computation (saves memory)
+vampprior_init_strategy = "random"  # "random" or "latent_kmeans"
 
 [training]
 device = "mps"  # "cuda", "mps", or "cpu"
@@ -61,13 +69,17 @@ kl_cyclical_ratio = 0.5  # For cyclical strategy: fraction of cycle spent increa
 
 [loss]
 reconstruction_weight = 1.0
-kl_weight = 2.0  # 
-free_bits = 0.1  # Minimum KL per latent dimension (prevents per-dim collapse)
+kl_weight = 1.5
+free_bits = 0.0  # Minimum KL per latent dimension (prevents per-dim collapse)
 reconstruction_type = "fractional_ce"  # "mse" | "l1" | "bce_logits"
 mask_threshold = 0.0
 bg_weight = 0.0
 edge_weight = 0.0  # Small edge loss for sharper boundaries (was 0.0)
 label_smoothing = 0.0
+
+# VampPrior regularization (only used when use_vampprior = true)
+vampprior_mu_reg = 0.0001  # L2 penalty on component means (prevents drift)
+vampprior_logvar_reg = 0.0001  # L2 penalty on component logvars (encourages var≈1)
 
 [checkpointing]
 experiments_dir = "/Users/tbm/frame_data/experiments"  # Base directory for experiments
@@ -79,5 +91,5 @@ save_best = true  # Save best validation loss
 [logging]
 log_every_steps = 25
 n_recon_compare = 25  # More frequent reconstruction comparisons
-n_analyze_latent = 125  # Analyze latent space every N steps (0=disabled)
-max_latent_analysis_samples = 16  # Max samples for latent histograms
+n_analyze_latent = 250  # Analyze latent space every N steps (0=disabled)
+max_latent_analysis_samples = 32  # Max samples for latent histograms

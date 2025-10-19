@@ -448,9 +448,15 @@ class BaseTrainer:
         x = vox[-1]            # (C, D, H, W)
         xr = x_recon[-1]       # (C, D, H, W)
 
-        # If outputs are logits for BCE, map to [0,1] for visualization
-        if hasattr(self, 'loss_fn') and getattr(self.loss_fn, 'reconstruction_type', 'mse') == 'bce_logits':
+        # Map outputs for visualization based on reconstruction type
+        if hasattr(self, 'loss_fn'):
+            rtype = getattr(self.loss_fn, 'reconstruction_type', 'mse')
+        else:
+            rtype = 'mse'
+        if rtype == 'bce_logits':
             xr_vis = torch.sigmoid(xr)
+        elif rtype == 'fractional_ce':
+            xr_vis = torch.nn.functional.softmax(xr, dim=0)  # channel-wise probabilities for visualization
         else:
             xr_vis = xr
 

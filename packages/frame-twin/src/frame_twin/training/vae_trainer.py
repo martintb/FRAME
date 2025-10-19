@@ -24,7 +24,11 @@ class VAETrainer(BaseTrainer):
                 base_channels=config.model.base_channels,
                 levels=config.model.levels,
                 logvar_mode=config.model.logvar_mode,
-                fixed_logvar_value=config.model.fixed_logvar_value
+                fixed_logvar_value=config.model.fixed_logvar_value,
+                use_vampprior=config.model.use_vampprior,
+                vampprior_num_components=config.model.vampprior_num_components,
+                vampprior_chunk_size=config.model.vampprior_chunk_size,
+                vampprior_init_strategy=config.model.vampprior_init_strategy
             )
         elif config.model.type == "unet_vae":
             from ..models import UNetVAE
@@ -51,7 +55,12 @@ class VAETrainer(BaseTrainer):
             bg_weight=getattr(config.loss, 'bg_weight', 0.5) or 0.5,
             edge_weight=getattr(config.loss, 'edge_weight', 0.0) or 0.0,
             free_bits=getattr(config.loss, 'free_bits', None),
-            label_smoothing=getattr(config.loss, 'label_smoothing', 0.0) or 0.0
+            label_smoothing=getattr(config.loss, 'label_smoothing', 0.0) or 0.0,
+            use_vampprior=config.model.use_vampprior,
+            model=model,
+            vampprior_chunk_size=config.model.vampprior_chunk_size,
+            vampprior_mu_reg=getattr(config.loss, 'vampprior_mu_reg', 0.0001) or 0.0001,
+            vampprior_logvar_reg=getattr(config.loss, 'vampprior_logvar_reg', 0.0001) or 0.0001
         )
         
         # Create optimizer
@@ -140,24 +149,30 @@ class VAETrainer(BaseTrainer):
     
     def _compute_loss(self, batch: Dict[str, Any]) -> tuple[torch.Tensor, Dict[str, float], tuple]:
         """Compute VAE loss for a batch.
-        
+
         Returns:
             total_loss: Scalar loss for backprop
             metrics: Dictionary of metrics to log
             latent_tuple: (z, mu, logvar) tensors for latent analysis
         """
         voxels = batch['voxels']  # Shape: (B, C, D, H, W)
-        
+
         # Forward pass
         x_recon, z, mu, logvar = self.model(voxels)
-        
-        # Compute loss components
-        total_loss_static, recon_loss, kl_loss, data_recon, bg_penalty, edge_loss, kl_total = self.loss_fn(x_recon, voxels, mu, logvar)
+
+        # Compute loss components (pass z for VampPrior)
+        total_loss_static, recon_loss, kl_loss, data_recon, bg_penalty, edge_loss, kl_total, vamp_reg = self.loss_fn(
+            x_recon, voxels, mu, logvar, z=z
+        )
 
         # Apply KL warmup by recomputing total loss with dynamic KL weight
         current_kl_weight = self._current_kl_weight()
         total_loss = self.loss_fn.reconstruction_weight * recon_loss + current_kl_weight * kl_loss
-        
+
+        # Add VampPrior regularization if enabled (not affected by KL warmup)
+        if self.loss_fn.use_vampprior and vamp_reg.item() > 0:
+            total_loss = total_loss + vamp_reg
+
         # Metrics
         metrics = {
             'total_loss': total_loss.item(),
@@ -169,7 +184,11 @@ class VAETrainer(BaseTrainer):
             'kl_total': kl_total.item(),
             'kl_weight': float(current_kl_weight),
         }
-        
+
+        # Add VampPrior regularization to metrics if enabled
+        if self.loss_fn.use_vampprior:
+            metrics['vamp_reg'] = vamp_reg.item()
+
         return total_loss, metrics, (z, mu, logvar)
 
     def _current_kl_weight(self) -> float:

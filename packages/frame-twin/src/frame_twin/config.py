@@ -46,10 +46,16 @@ class VAEModelConfig(BaseModel):
     channel_schedule: Optional[List[int]] = Field(None, description="List of channel sizes at each level (e.g., [32, 64, 128, 256])")
     norm_groups: int = Field(8, gt=0)  # Number of groups for GroupNorm (UNetVAE only)
     skip_dropout_prob: float = Field(0.0, ge=0.0, le=1.0, description="Probability of dropping skip connections during training (UNetVAE only)")
-    
+
     # Logvar strategy
     logvar_mode: Literal["learned", "fixed", "scalar"] = Field("learned", description="Variance modeling: 'learned' (full spatial), 'fixed' (constant), 'scalar' (single learnable parameter)")
     fixed_logvar_value: float = Field(0.0, description="Fixed log-variance value when logvar_mode='fixed' (0.0 corresponds to std=1.0)")
+
+    # VampPrior configuration
+    use_vampprior: bool = Field(False, description="Use VampPrior (Variational Mixture of Posteriors Prior) instead of standard Gaussian prior")
+    vampprior_num_components: int = Field(128, gt=0, description="Number of learnable pseudo-input components for VampPrior (K)")
+    vampprior_chunk_size: int = Field(32, gt=0, description="Chunk size for computing VampPrior logsumexp to save memory")
+    vampprior_init_strategy: Literal["random", "latent_kmeans"] = Field("random", description="Strategy for initializing VampPrior components")
 
     @validator('channel_schedule')
     def validate_channel_schedule(cls, v, values):
@@ -155,6 +161,10 @@ class LossConfig(BaseModel):
     bg_weight: Optional[float] = Field(None, ge=0.0)
     edge_weight: Optional[float] = Field(None, ge=0.0)  # Edge-preserving loss weight
     label_smoothing: Optional[float] = Field(0.0, ge=0.0, le=1.0, description="Label smoothing for fractional_ce loss")
+
+    # VampPrior regularization parameters
+    vampprior_mu_reg: Optional[float] = Field(0.0001, ge=0.0, description="L2 regularization weight on VampPrior component means")
+    vampprior_logvar_reg: Optional[float] = Field(0.0001, ge=0.0, description="L2 regularization weight on VampPrior component logvars (encourages var≈1)")
 
     # DDPM loss parameters
     loss_type: Optional[Literal["mse", "mae"]] = None
