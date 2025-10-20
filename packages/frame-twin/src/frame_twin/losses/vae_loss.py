@@ -78,9 +78,6 @@ class VAELoss(nn.Module):
     Includes "free bits" constraint to prevent posterior collapse by ensuring each latent
     dimension contributes a minimum amount of information.
 
-    Supports VampPrior (Variational Mixture of Posteriors Prior) as an alternative to
-    standard Gaussian prior N(0,I).
-
     Args:
         reconstruction_weight: Weight for reconstruction loss
         kl_weight: Weight for KL divergence loss
@@ -91,11 +88,6 @@ class VAELoss(nn.Module):
         free_bits: Minimum KL divergence per latent dimension (prevents collapse).
                    If None, standard KL loss is used. Typical values: 0.5-2.0
         label_smoothing: Label smoothing for fractional_ce loss
-        use_vampprior: Use VampPrior instead of standard Gaussian prior
-        model: Reference to VAE model (needed to access VampPrior components)
-        vampprior_chunk_size: Chunk size for VampPrior logsumexp computation
-        vampprior_mu_reg: L2 regularization weight on VampPrior means
-        vampprior_logvar_reg: L2 regularization weight on VampPrior logvars
     """
 
     def __init__(
@@ -107,12 +99,7 @@ class VAELoss(nn.Module):
         bg_weight: float = 0.5,
         edge_weight: float = 0.0,
         free_bits: Optional[float] = None,
-        label_smoothing: float = 0.0,
-        use_vampprior: bool = False,
-        model: Optional[nn.Module] = None,
-        vampprior_chunk_size: int = 32,
-        vampprior_mu_reg: float = 0.0001,
-        vampprior_logvar_reg: float = 0.0001
+        label_smoothing: float = 0.0
     ):
         super().__init__()
 
@@ -124,11 +111,6 @@ class VAELoss(nn.Module):
         self.edge_weight = edge_weight
         self.free_bits = free_bits
         self.label_smoothing = label_smoothing
-        self.use_vampprior = use_vampprior
-        self.model = model
-        self.vampprior_chunk_size = vampprior_chunk_size
-        self.vampprior_mu_reg = vampprior_mu_reg
-        self.vampprior_logvar_reg = vampprior_logvar_reg
 
         # Create 3D Sobel filters for gradient computation (if edge loss is enabled)
         if self.edge_weight > 0:
@@ -215,93 +197,13 @@ class VAELoss(nn.Module):
         else:
             raise ValueError(f"Unknown reconstruction type: {self.reconstruction_type}")
 
-    def _vampprior_kl_loss(
-        self,
-        z: torch.Tensor,
-        mu: torch.Tensor,
-        logvar: torch.Tensor,
-        vamp_means: torch.Tensor,
-        vamp_logvars: torch.Tensor
-    ) -> torch.Tensor:
-        """Compute KL divergence to VampPrior: KL(q(z|x) || p(z))
-        where p(z) = 1/K Σ_k N(z; μ_k, exp(logvar_k))
-
-        Uses chunked computation to avoid memory explosion.
-
-        Args:
-            z: Latent samples (B, C, S, S, S)
-            mu: Encoder means (B, C, S, S, S)
-            logvar: Encoder log-variances (B, C, S, S, S)
-            vamp_means: VampPrior component means (K, C, S, S, S)
-            vamp_logvars: VampPrior component log-variances (K, C, S, S, S)
-
-        Returns:
-            Scalar KL divergence loss
-        """
-        K = vamp_means.shape[0]
-        chunk_size = self.vampprior_chunk_size
-
-        # Compute log q(z|x) in fp32 for numerical stability - sum over all latent dimensions
-        z_fp32, mu_fp32, logvar_fp32 = z.float(), mu.float(), logvar.float()
-        log_q_zx = log_gaussian(z_fp32, mu_fp32, logvar_fp32).sum(dim=(1, 2, 3, 4))  # (B,)
-
-        vamp_means_fp32 = vamp_means.float()
-        vamp_logvars_fp32 = vamp_logvars.float()
-
-        log_q_z_uk_chunks = []
-        for k0 in range(0, K, chunk_size):
-            k_end = min(k0 + chunk_size, K)
-            m_k = vamp_means_fp32[k0:k_end]  # (k, C, S, S, S)
-            lv_k = vamp_logvars_fp32[k0:k_end]  # (k, C, S, S, S)
-
-            # Broadcast: z (B,1,C,S,S,S) vs components (1,k,C,S,S,S)
-            # Compute log N(z; μ_k, exp(logvar_k)) and sum over ALL latent dims (C,S,S,S)
-            log_q_z_uk_chunk = log_gaussian(
-                z_fp32.unsqueeze(1),   # (B, 1, C, S, S, S)
-                m_k.unsqueeze(0),      # (1, k, C, S, S, S)
-                lv_k.unsqueeze(0)      # (1, k, C, S, S, S)
-            ).sum(dim=(2, 3, 4, 5))    # (B, k)
-
-            log_q_z_uk_chunks.append(log_q_z_uk_chunk)
-
-        # Concatenate chunks over components: (B, K)
-        log_q_z_uk = torch.cat(log_q_z_uk_chunks, dim=1)
-
-        # log p(z) = log(1/K) + logsumexp over K components of full-tensor log-likelihoods
-        log_pz = torch.logsumexp(log_q_z_uk - math.log(K), dim=1)  # (B,)
-
-        # KL = E[log q(z|x) - log p(z)] = mean over batch
-        kl_vamp = (log_q_zx - log_pz).mean()
-
-        return kl_vamp
-
-    def _vampprior_regularization(
-        self,
-        vamp_means: torch.Tensor,
-        vamp_logvars: torch.Tensor
-    ) -> torch.Tensor:
-        """Compute regularization on VampPrior components.
-
-        Encourages μ_k ≈ 0 and var_k ≈ 1 to prevent degenerate components.
-
-        Args:
-            vamp_means: VampPrior component means (K, C, S, S, S)
-            vamp_logvars: VampPrior component log-variances (K, C, S, S, S)
-
-        Returns:
-            Scalar regularization loss
-        """
-        reg_mu = self.vampprior_mu_reg * (vamp_means ** 2).mean()
-        reg_lv = self.vampprior_logvar_reg * (vamp_logvars ** 2).mean()
-        return reg_mu + reg_lv
     
     def forward(
         self,
         x_recon: torch.Tensor,
         x: torch.Tensor,
         mean: torch.Tensor,
-        logvar: torch.Tensor,
-        z: Optional[torch.Tensor] = None
+        logvar: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Compute VAE loss.
@@ -311,7 +213,6 @@ class VAELoss(nn.Module):
             x: Original input
             mean: Latent mean
             logvar: Latent log variance
-            z: Latent samples (required for VampPrior)
 
         Returns:
             total_loss: Combined loss
@@ -321,7 +222,7 @@ class VAELoss(nn.Module):
             bg_penalty: Background penalty (for logging)
             edge_loss_val: Edge loss (for logging)
             kl_total: Total KL divergence per sample (for logging)
-            vamp_reg: VampPrior regularization (for logging, 0 if not using VampPrior)
+            vamp_reg: VampPrior regularization (for logging, always 0 for standard VAE)
         """
         # Reconstruction loss (always compute for logging, even if weight is zero)
         data_recon = self._recon_loss(x_recon, x)
@@ -362,44 +263,21 @@ class VAELoss(nn.Module):
             edge_loss_val = self._edge_loss(xr_for_edges, x_for_edges)
             recon_loss = recon_loss + self.edge_weight * edge_loss_val
 
-        # KL divergence loss: use VampPrior or standard Gaussian prior
-        if self.use_vampprior and self.model is not None:
-            # VampPrior KL divergence
-            if z is None:
-                raise ValueError("VampPrior requires z (latent samples) to be passed to loss")
+        # Standard Gaussian prior KL divergence
+        kl_per_dim = -0.5 * (1 + logvar - mean.pow(2) - logvar.exp())
+        kl_total = kl_per_dim.sum(dim=1).mean()
 
-            vamp_components = self.model.get_vampprior_components()
-            if vamp_components is not None:
-                vamp_means, vamp_logvars = vamp_components
-                kl_loss = self._vampprior_kl_loss(z, mean, logvar, vamp_means, vamp_logvars)
-
-                # Add regularization on VampPrior components
-                vamp_reg = self._vampprior_regularization(vamp_means, vamp_logvars)
-
-                # Compute total KL for logging (use standard KL as approximation)
-                kl_per_dim = -0.5 * (1 + logvar - mean.pow(2) - logvar.exp())
-                kl_total = kl_per_dim.sum(dim=1).mean()
-            else:
-                # VampPrior not yet initialized, fall back to standard KL
-                kl_per_dim = -0.5 * (1 + logvar - mean.pow(2) - logvar.exp())
-                kl_total = kl_per_dim.sum(dim=1).mean()
-                kl_loss = kl_per_dim.mean()
+        # KL divergence loss with optional free bits constraint
+        if self.free_bits is not None and self.free_bits > 0:
+            # Free bits: ensure each latent dimension contributes at least free_bits nats
+            # This prevents individual dimensions from collapsing to zero
+            # Shape: (B, C, D, H, W) -> sum over spatial dims, clamp, then mean over batch and channels
+            kl_per_dim_spatial = kl_per_dim.mean(dim=(2, 3, 4))  # (B, C)
+            kl_clamped = torch.clamp(kl_per_dim_spatial, min=self.free_bits)
+            kl_loss = kl_clamped.mean()
         else:
-            # Standard Gaussian prior KL divergence
-            kl_per_dim = -0.5 * (1 + logvar - mean.pow(2) - logvar.exp())
-            kl_total = kl_per_dim.sum(dim=1).mean()
-
-            # KL divergence loss with optional free bits constraint
-            if self.free_bits is not None and self.free_bits > 0:
-                # Free bits: ensure each latent dimension contributes at least free_bits nats
-                # This prevents individual dimensions from collapsing to zero
-                # Shape: (B, C, D, H, W) -> sum over spatial dims, clamp, then mean over batch and channels
-                kl_per_dim_spatial = kl_per_dim.mean(dim=(2, 3, 4))  # (B, C)
-                kl_clamped = torch.clamp(kl_per_dim_spatial, min=self.free_bits)
-                kl_loss = kl_clamped.mean()
-            else:
-                # Standard KL loss - mean reduction
-                kl_loss = kl_per_dim.mean()
+            # Standard KL loss - mean reduction
+            kl_loss = kl_per_dim.mean()
 
         # Total loss - only include terms with non-zero weights
         total_loss = torch.tensor(0.0, device=x_recon.device)
@@ -407,10 +285,6 @@ class VAELoss(nn.Module):
             total_loss = total_loss + self.reconstruction_weight * recon_loss
         if self.kl_weight > 0.0:
             total_loss = total_loss + self.kl_weight * kl_loss
-
-        # Add VampPrior regularization to total loss
-        if self.use_vampprior and vamp_reg.item() > 0:
-            total_loss = total_loss + vamp_reg
 
         # Return detailed components for logging
         return total_loss, recon_loss, kl_loss, data_recon.detach(), bg_penalty.detach(), edge_loss_val.detach(), kl_total.detach(), vamp_reg.detach()

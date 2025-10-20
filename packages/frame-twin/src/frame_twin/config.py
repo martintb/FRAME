@@ -51,11 +51,6 @@ class VAEModelConfig(BaseModel):
     logvar_mode: Literal["learned", "fixed", "scalar"] = Field("learned", description="Variance modeling: 'learned' (full spatial), 'fixed' (constant), 'scalar' (single learnable parameter)")
     fixed_logvar_value: float = Field(0.0, description="Fixed log-variance value when logvar_mode='fixed' (0.0 corresponds to std=1.0)")
 
-    # VampPrior configuration
-    use_vampprior: bool = Field(False, description="Use VampPrior (Variational Mixture of Posteriors Prior) instead of standard Gaussian prior")
-    vampprior_num_components: int = Field(128, gt=0, description="Number of learnable pseudo-input components for VampPrior (K)")
-    vampprior_chunk_size: int = Field(32, gt=0, description="Chunk size for computing VampPrior logsumexp to save memory")
-    vampprior_init_strategy: Literal["random", "latent_kmeans"] = Field("random", description="Strategy for initializing VampPrior components")
 
     @validator('channel_schedule')
     def validate_channel_schedule(cls, v, values):
@@ -88,6 +83,54 @@ class VAEModelConfig(BaseModel):
         if self.channel_schedule is not None:
             return self.channel_schedule[0]
         return self.base_channels
+
+
+class HVAEModelConfig(BaseModel):
+    """HVAE model configuration."""
+    type: Literal["hvae"] = "hvae"
+    num_layers: Literal[1, 2] = 2
+    input_channels: int = Field(gt=0)
+    
+    # Top latent (z2 in 2-layer mode)
+    latent_channels_top: int = Field(gt=0)
+    channel_schedule_top: List[int] = Field(description="List of channel sizes at each level for top encoder")
+    spatial_size_top: Optional[int] = Field(None, gt=0, description="Spatial size of top latent (derived from channel_schedule_top if not specified)")
+
+    # Bottom latent (z1 in 2-layer mode, unused in 1-layer)
+    latent_channels_bottom: Optional[int] = Field(None, gt=0, description="Number of channels in bottom latent (required for 2-layer mode)")
+    channel_schedule_bottom: Optional[List[int]] = Field(None, description="List of channel sizes at each level for bottom encoder (required for 2-layer mode)")
+    spatial_size_bottom: Optional[int] = Field(None, gt=0, description="Spatial size of bottom latent (derived from channel_schedule_bottom if not specified)")
+    
+    # Decoder conditioning
+    decoder_conditioning_type: Literal["concat", "film"] = Field("concat", description="Type of decoder conditioning")
+    
+    # Logvar strategy
+    logvar_mode: Literal["learned", "fixed", "scalar"] = Field("learned", description="Variance modeling: 'learned' (full spatial), 'fixed' (constant), 'scalar' (single learnable parameter)")
+    fixed_logvar_value: float = Field(0.0, description="Fixed log-variance value when logvar_mode='fixed' (0.0 corresponds to std=1.0)")
+    
+    # VampPrior (on top latent)
+    vampprior_num_components: int = Field(128, gt=0, description="Number of learnable pseudo-input components for VampPrior (K)")
+    vampprior_chunk_size: int = Field(32, gt=0, description="Chunk size for computing VampPrior logsumexp to save memory")
+    vampprior_init_strategy: Literal["random", "latent_kmeans"] = Field("random", description="Strategy for initializing VampPrior components")
+
+    # Input size
+    input_spatial_size: int = Field(64, gt=0, description="Spatial size of input voxels (e.g., 64 for 64³, 128 for 128³)")
+
+    @validator('latent_channels_bottom')
+    def validate_bottom_channels(cls, v, values):
+        """Validate bottom latent channels for 2-layer mode."""
+        num_layers = values.get('num_layers')
+        if num_layers == 2 and v is None:
+            raise ValueError("latent_channels_bottom is required for 2-layer mode")
+        return v
+
+    @validator('channel_schedule_bottom')
+    def validate_bottom_schedule(cls, v, values):
+        """Validate bottom channel schedule for 2-layer mode."""
+        num_layers = values.get('num_layers')
+        if num_layers == 2 and v is None:
+            raise ValueError("channel_schedule_bottom is required for 2-layer mode")
+        return v
 
 
 class DDPMConditioningConfig(BaseModel):
@@ -140,11 +183,23 @@ class TrainingConfig(BaseModel):
     num_workers: int = Field(ge=0)
     grad_clip: Optional[float] = Field(None, ge=0.0)  # Gradient clipping value (None to disable)
 
-    # KL annealing parameters
+    # KL annealing parameters (unified - for backward compatibility)
     kl_warmup_epochs: Optional[int] = Field(0, ge=0)  # Linear KL warmup epochs (used when kl_annealing_strategy="linear")
     kl_annealing_strategy: Literal["linear", "cyclical"] = Field("linear", description="KL annealing strategy: 'linear' for one-time warmup, 'cyclical' for periodic restarts")
     kl_cyclical_cycle_epochs: Optional[int] = Field(None, gt=0, description="Number of epochs per cycle (only for cyclical strategy)")
     kl_cyclical_ratio: Optional[float] = Field(None, gt=0.0, le=1.0, description="Fraction of each cycle spent increasing KL weight (only for cyclical strategy, e.g., 0.5 = half up, half at max)")
+
+    # KL annealing parameters for HVAE - bottom latent (z1)
+    kl_warmup_epochs_bottom: Optional[int] = Field(None, ge=0, description="Linear KL warmup epochs for bottom latent (overrides unified if set)")
+    kl_annealing_strategy_bottom: Optional[Literal["linear", "cyclical"]] = Field(None, description="KL annealing strategy for bottom latent (overrides unified if set)")
+    kl_cyclical_cycle_epochs_bottom: Optional[int] = Field(None, gt=0, description="Number of epochs per cycle for bottom latent (only for cyclical strategy)")
+    kl_cyclical_ratio_bottom: Optional[float] = Field(None, gt=0.0, le=1.0, description="Fraction of each cycle spent increasing for bottom latent")
+
+    # KL annealing parameters for HVAE - top latent (z2)
+    kl_warmup_epochs_top: Optional[int] = Field(None, ge=0, description="Linear KL warmup epochs for top latent (overrides unified if set)")
+    kl_annealing_strategy_top: Optional[Literal["linear", "cyclical"]] = Field(None, description="KL annealing strategy for top latent (overrides unified if set)")
+    kl_cyclical_cycle_epochs_top: Optional[int] = Field(None, gt=0, description="Number of epochs per cycle for top latent (only for cyclical strategy)")
+    kl_cyclical_ratio_top: Optional[float] = Field(None, gt=0.0, le=1.0, description="Fraction of each cycle spent increasing for top latent")
 
     # Scheduler-specific parameters
     scheduler_params: Optional[Dict] = None
@@ -162,9 +217,13 @@ class LossConfig(BaseModel):
     edge_weight: Optional[float] = Field(None, ge=0.0)  # Edge-preserving loss weight
     label_smoothing: Optional[float] = Field(0.0, ge=0.0, le=1.0, description="Label smoothing for fractional_ce loss")
 
-    # VampPrior regularization parameters
-    vampprior_mu_reg: Optional[float] = Field(0.0001, ge=0.0, description="L2 regularization weight on VampPrior component means")
-    vampprior_logvar_reg: Optional[float] = Field(0.0001, ge=0.0, description="L2 regularization weight on VampPrior component logvars (encourages var≈1)")
+    # HVAE-specific parameters
+    kl_weight_bottom: Optional[float] = Field(None, gt=0.0, description="Weight for bottom KL divergence (β1)")
+    kl_weight_top: Optional[float] = Field(None, gt=0.0, description="Weight for top KL divergence (β2)")
+    free_bits_bottom: Optional[float] = Field(None, ge=0.0, description="Minimum KL divergence per bottom latent dimension (prevents collapse)")
+    vampprior_chunk_size: Optional[int] = Field(None, gt=0, description="Chunk size for VampPrior computation")
+    vampprior_mu_reg: Optional[float] = Field(None, ge=0.0, description="L2 regularization weight on VampPrior component means")
+    vampprior_logvar_reg: Optional[float] = Field(None, ge=0.0, description="L2 regularization weight on VampPrior component logvars")
 
     # DDPM loss parameters
     loss_type: Optional[Literal["mse", "mae"]] = None
@@ -214,7 +273,7 @@ class VAEConfig(BaseModel):
     """Complete VAE training configuration."""
     metadata: MetadataConfig
     data: DataConfig
-    model: VAEModelConfig
+    model: Union[VAEModelConfig, HVAEModelConfig]
     training: TrainingConfig
     loss: LossConfig
     checkpointing: CheckpointingConfig

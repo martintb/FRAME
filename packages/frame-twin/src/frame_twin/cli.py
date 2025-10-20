@@ -78,7 +78,7 @@ def register_subcommands(subparsers):
     
     # Generate config command
     generate_config_parser = twin_subparsers.add_parser('generate-config', help='Generate template config file')
-    generate_config_parser.add_argument('model_type', choices=['vae', 'unet_vae', 'ddpm'], help='Model type for config template')
+    generate_config_parser.add_argument('model_type', choices=['vae', 'unet_vae', 'hvae', 'ddpm'], help='Model type for config template')
     generate_config_parser.add_argument('output', help='Output path for config file')
     
     # Generate command
@@ -155,7 +155,7 @@ def main():
     
     # Generate config command
     generate_config_parser = subparsers.add_parser('generate-config', help='Generate template config file')
-    generate_config_parser.add_argument('model_type', choices=['vae', 'unet_vae', 'ddpm'], help='Model type for config template')
+    generate_config_parser.add_argument('model_type', choices=['vae', 'unet_vae', 'hvae', 'ddpm'], help='Model type for config template')
     generate_config_parser.add_argument('output', help='Output path for config file')
     
     # Generate command
@@ -307,12 +307,12 @@ def train(config_path: str):
     model_type = config_data.get('model', {}).get('type')
     print(f"Detected model type: {model_type}")
     
-    if model_type in ['vae', 'unet_vae']:
+    if model_type in ['vae', 'unet_vae', 'hvae']:
         train_vae(config_path)
     elif model_type == 'ddpm':
         train_ddpm(config_path)
     else:
-        raise ValueError(f"Unknown model type: {model_type}. Expected 'vae', 'unet_vae', or 'ddpm'")
+        raise ValueError(f"Unknown model type: {model_type}. Expected 'vae', 'unet_vae', 'hvae', or 'ddpm'")
 
 
 def train_vae(config_path: str):
@@ -330,12 +330,27 @@ def train_vae(config_path: str):
     # Create experiment using ExperimentManager
     print("Creating experiment...")
     exp_mgr = ExperimentManager()
+
+    # Build tags based on model type
+    tags = [config.model.type]
+    if config.model.type in ["vae", "unet_vae"]:
+        # VAE models have 'levels' and 'latent_channels'
+        if hasattr(config.model, 'levels') and config.model.levels is not None:
+            tags.append(f"{config.model.levels}-level")
+        tags.append(f"latent-{config.model.latent_channels}")
+    elif config.model.type == "hvae":
+        # HVAE models have 'num_layers' and 'latent_channels_top/bottom'
+        tags.append(f"{config.model.num_layers}-layer")
+        tags.append(f"latent-top-{config.model.latent_channels_top}")
+        if config.model.latent_channels_bottom is not None:
+            tags.append(f"latent-bottom-{config.model.latent_channels_bottom}")
+
     experiment = exp_mgr.create_experiment(
         name=config.metadata.name,
         model_type=config.model.type,
         library_uuid=library_uuid or config.data.library_uuid,
         config_path=Path(config_path),
-        tags=[config.model.type, f"{config.model.levels}-level", f"latent-{config.model.latent_channels}"],
+        tags=tags,
         dependencies={}
     )
     print(f"Created experiment: {experiment.uuid}")
@@ -707,9 +722,9 @@ def continue_training(experiment_uuid: str, config_path: Optional[str] = None):
         print(f"Using original config: {config_file}")
     
     # Load config and determine model type
-    if experiment.model_type in ['vae', 'unet_vae']:
+    if experiment.model_type in ['vae', 'unet_vae', 'hvae']:
         config = VAEConfig.from_toml(str(config_file))
-        print("Resuming VAE training...")
+        print("Resuming VAE/HVAE training...")
         
         # Create a new experiment for continuation
         exp_mgr = ExperimentManager()
@@ -936,8 +951,97 @@ log_every_steps = 50
 n_recon_compare = 100  # Log generated samples every N steps (both training and validation)
 """
     
+    elif model_type == 'hvae':
+        template = """# HVAE Training Configuration for frame-twin
+# This config trains a Hierarchical VAE with VampPrior on top latent
+
+[metadata]
+name = "lnp_hvae_training"
+description = "HVAE training for LNP voxel structure compression with hierarchical latent space"
+random_seed = 42
+
+[data]
+library_uuid = "REPLACE_WITH_LIBRARY_UUID"  # Use 'frame library list' to find UUID
+split_strategy = "random"  # or "stratified"
+train_ratio = 0.8
+val_ratio = 0.1
+test_ratio = 0.1
+# stratify_params = ["shell1_radius_nm", "shell2_probability"]  # for stratified splitting
+
+[model]
+type = "hvae"
+num_layers = 2  # 1 for standard VAE with VampPrior, 2 for hierarchical
+
+# Top latent (z2) - always present
+latent_channels_top = 16  # Smaller top latent for global structure
+channel_schedule_top = [32, 64, 128, 256]  # Channel schedule for top encoder
+spatial_size_top = 4  # 4³ top latent space
+
+# Bottom latent (z1) - only for 2-layer mode
+latent_channels_bottom = 32  # Larger bottom latent for local details
+channel_schedule_bottom = [64, 128, 256, 512]  # Channel schedule for bottom encoder
+spatial_size_bottom = 8  # 8³ bottom latent space
+
+# Decoder conditioning
+decoder_conditioning_type = "concat"  # "concat" or "film"
+
+# Logvar strategy
+logvar_mode = "learned"  # "learned", "fixed", or "scalar"
+fixed_logvar_value = 0.0
+
+# VampPrior configuration (on top latent)
+vampprior_num_components = 128  # Number of mixture components
+vampprior_chunk_size = 32  # Chunk size for memory efficiency
+vampprior_init_strategy = "random"  # "random" or "latent_kmeans"
+
+[training]
+device = "cuda"  # or "cpu", "mps"
+distributed = false  # Set true for DDP
+num_epochs = 100
+batch_size = 8  # Smaller batch size due to hierarchical architecture
+learning_rate = 1e-4
+optimizer = "adam"  # "adam", "adamw", or "sgd"
+scheduler = "cosine"  # "cosine", "step", or "none"
+num_workers = 4
+grad_clip = 1.0  # Gradient clipping value (None to disable)
+
+# KL annealing parameters
+kl_warmup_epochs = 10  # Linear KL warmup epochs
+kl_annealing_strategy = "linear"  # "linear" or "cyclical"
+
+[loss]
+reconstruction_weight = 1.0
+# Separate β weights for hierarchical model
+kl_weight_bottom = 0.001  # β1: weight for bottom KL (local details)
+kl_weight_top = 0.001     # β2: weight for top KL (global structure)
+reconstruction_type = "mse"  # "mse" | "l1" | "bce_logits" | "fractional_ce"
+mask_threshold = 0.005
+bg_weight = 0.0
+edge_weight = 0.1  # Edge-preserving loss weight
+
+# Free bits for bottom latent (prevents collapse)
+free_bits_bottom = 0.05  # Minimum KL per bottom latent dimension
+
+# VampPrior regularization
+vampprior_mu_reg = 0.0001  # L2 regularization on VampPrior means
+vampprior_logvar_reg = 0.0001  # L2 regularization on VampPrior logvars
+
+[checkpointing]
+experiments_dir = "/Users/tbm/frame_data/experiments"  # Base directory for experiments
+save_every_epochs = 10
+save_every_minutes = 60  # Time-based checkpointing
+keep_last_n = 3
+save_best = true  # Save best validation loss
+
+[logging]
+log_every_steps = 50
+n_recon_compare = 100  # Log reconstruction comparison every N steps
+n_analyze_latent = 200  # Analyze latent space every N steps (0=disabled)
+max_latent_analysis_samples = 128  # Max samples for latent histograms
+"""
+    
     else:
-        raise ValueError(f"Unknown model type: {model_type}. Expected 'vae', 'unet_vae', or 'ddpm'")
+        raise ValueError(f"Unknown model type: {model_type}. Expected 'vae', 'unet_vae', 'hvae', or 'ddpm'")
     
     # Write template to file
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1013,7 +1117,7 @@ def _load_experiment_and_checkpoint(experiment_uuid: str):
 
 def _create_model_from_checkpoint(experiment, checkpoint_data, device: torch.device):
     """Instantiate model from checkpoint configuration."""
-    from .models import VAE, UNetVAE
+    from .models import VAE, UNetVAE, HVAE
 
     print(f"Creating {experiment.model_type} model...")
     model_config = checkpoint_data.get('config', {}).get('model', {}) or {}
@@ -1056,6 +1160,32 @@ def _create_model_from_checkpoint(experiment, checkpoint_data, device: torch.dev
         else:
             unet_kwargs.update(_legacy_schedule_kwargs())
         model = UNetVAE(**unet_kwargs)
+    elif experiment.model_type == 'hvae':
+        hvae_kwargs = {
+            'num_layers': model_config.get('num_layers', 2),
+            'input_channels': input_channels,
+            'latent_channels_top': model_config.get('latent_channels_top', 16),
+            'latent_channels_bottom': model_config.get('latent_channels_bottom'),
+            'channel_schedule_top': model_config.get('channel_schedule_top'),
+            'channel_schedule_bottom': model_config.get('channel_schedule_bottom'),
+            'spatial_size_top': model_config.get('spatial_size_top', 4),
+            'spatial_size_bottom': model_config.get('spatial_size_bottom'),
+            'decoder_conditioning_type': model_config.get('decoder_conditioning_type', 'concat'),
+            'logvar_mode': model_config.get('logvar_mode', 'learned'),
+            'fixed_logvar_value': model_config.get('fixed_logvar_value', 0.0),
+            'vampprior_num_components': model_config.get('vampprior_num_components', 128),
+            'vampprior_chunk_size': model_config.get('vampprior_chunk_size', 32),
+            'vampprior_init_strategy': model_config.get('vampprior_init_strategy', 'random')
+        }
+        model = HVAE(**hvae_kwargs)
+        
+        # Initialize VampPrior components if they exist in the checkpoint
+        state_dict = checkpoint_data['model_state_dict']
+        if 'vamp_means' in state_dict:
+            # Detect latent spatial size from vamp_means shape: (K, C, S, S, S)
+            latent_spatial_size = state_dict['vamp_means'].shape[-1]
+            print(f"Initializing VampPrior components with latent_spatial_size={latent_spatial_size}")
+            model._init_vampprior_components(latent_spatial_size, device)
     else:
         raise ValueError(f"Unsupported model type: {experiment.model_type}")
 
@@ -1153,7 +1283,11 @@ def _generate_prior_sample_voxel(
 ) -> VoxelGrid:
     """Sample latent prior and return VoxelGrid."""
     with torch.no_grad():
-        logits = model.sample(num_samples=1, device=device, latent_size=latent_size)
+        # Handle different model types
+        if hasattr(model, 'num_layers'):  # HVAE model
+            logits = model.sample(num_samples=1, device=device, latent_size_top=latent_size)
+        else:  # VAE or UNetVAE
+            logits = model.sample(num_samples=1, device=device, latent_size=latent_size)
         generated = _apply_activation(logits, reconstruction_type)
 
     generated_data = generated.squeeze(0).cpu().float()
@@ -1193,8 +1327,8 @@ def sample_prior_from_experiment(
 ) -> None:
     """CLI entry: sample from latent prior and visualize in napari."""
     experiment, checkpoint, checkpoint_data = _load_experiment_and_checkpoint(experiment_uuid)
-    if experiment.model_type not in {'vae', 'unet_vae'}:
-        raise ValueError(f"Experiment {experiment_uuid} is not a VAE/UNet-VAE (got {experiment.model_type})")
+    if experiment.model_type not in {'vae', 'unet_vae', 'hvae'}:
+        raise ValueError(f"Experiment {experiment_uuid} is not a VAE/UNet-VAE/HVAE (got {experiment.model_type})")
 
     device = _determine_device(device_choice)
     model = _create_model_from_checkpoint(experiment, checkpoint_data, device)
@@ -1315,8 +1449,8 @@ def perturb_structure_from_experiment(
 ) -> None:
     """CLI entry: encode structure, perturb latent, decode and visualize."""
     experiment, checkpoint, checkpoint_data = _load_experiment_and_checkpoint(experiment_uuid)
-    if experiment.model_type not in {'vae', 'unet_vae'}:
-        raise ValueError(f"Experiment {experiment_uuid} is not a VAE/UNet-VAE (got {experiment.model_type})")
+    if experiment.model_type not in {'vae', 'unet_vae', 'hvae'}:
+        raise ValueError(f"Experiment {experiment_uuid} is not a VAE/UNet-VAE/HVAE (got {experiment.model_type})")
 
     device = _determine_device(device_choice)
     model = _create_model_from_checkpoint(experiment, checkpoint_data, device)
@@ -1334,7 +1468,19 @@ def perturb_structure_from_experiment(
 
     with torch.no_grad():
         input_tensor = working_voxel.data.unsqueeze(0).to(device)
-        recon_logits, _, mu, _ = model(input_tensor)
+        
+        # Handle different model return signatures
+        if hasattr(model, 'num_layers'):  # HVAE model
+            forward_output = model(input_tensor)
+            recon_logits = forward_output[0]
+            mu_top = forward_output[2]  # Top latent mean
+            z_bottom = forward_output[4]  # Bottom latent samples (None for 1-layer)
+            # For perturbation, we'll perturb the top latent
+            mu = mu_top
+        else:  # VAE or UNetVAE
+            recon_logits, _, mu, _ = model(input_tensor)
+            z_bottom = None
+        
         recon_tensor = _apply_activation(recon_logits, reconstruction_type).squeeze(0).cpu().float()
 
     print(f"Reconstruction range: [{recon_tensor.min():.4f}, {recon_tensor.max():.4f}] mean={recon_tensor.mean():.4f}")
@@ -1350,7 +1496,16 @@ def perturb_structure_from_experiment(
         for idx in range(num_samples):
             noise = torch.randn_like(mu) * sigma
             latent_sample = mu + noise
-            decoded_logits = model.decode(latent_sample)
+            
+            # Handle different decode signatures
+            if hasattr(model, 'num_layers'):  # HVAE model
+                if model.num_layers == 2:
+                    decoded_logits = model.decode(latent_sample, z_bottom)
+                else:  # 1-layer
+                    decoded_logits = model.decode(latent_sample)
+            else:  # VAE or UNetVAE
+                decoded_logits = model.decode(latent_sample)
+            
             decoded_tensor = _apply_activation(decoded_logits, reconstruction_type).squeeze(0).cpu().float()
             print(f"Perturbation {idx}: range [{decoded_tensor.min():.4f}, {decoded_tensor.max():.4f}] mean={decoded_tensor.mean():.4f}")
             metadata = {
@@ -1590,6 +1745,25 @@ def validate_vae_reconstruction(
             fixed_logvar_value=vae_config.get('fixed_logvar_value', 0.0)
         )
         print("Using UNetVAE model")
+    elif model_type == 'hvae':
+        from .models import HVAE
+        vae = HVAE(
+            num_layers=vae_config.get('num_layers', 2),
+            input_channels=vae_config['input_channels'],
+            latent_channels_top=vae_config.get('latent_channels_top', 16),
+            latent_channels_bottom=vae_config.get('latent_channels_bottom'),
+            channel_schedule_top=vae_config.get('channel_schedule_top'),
+            channel_schedule_bottom=vae_config.get('channel_schedule_bottom'),
+            spatial_size_top=vae_config.get('spatial_size_top', 4),
+            spatial_size_bottom=vae_config.get('spatial_size_bottom'),
+            decoder_conditioning_type=vae_config.get('decoder_conditioning_type', 'concat'),
+            logvar_mode=vae_config.get('logvar_mode', 'learned'),
+            fixed_logvar_value=vae_config.get('fixed_logvar_value', 0.0),
+            vampprior_num_components=vae_config.get('vampprior_num_components', 128),
+            vampprior_chunk_size=vae_config.get('vampprior_chunk_size', 32),
+            vampprior_init_strategy=vae_config.get('vampprior_init_strategy', 'random')
+        )
+        print("Using HVAE model")
     else:
         from .models import VAE
         vae = VAE(

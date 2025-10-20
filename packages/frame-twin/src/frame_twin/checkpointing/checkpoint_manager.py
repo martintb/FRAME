@@ -186,6 +186,14 @@ class CheckpointManager:
         # Load checkpoint
         checkpoint_data = torch.load(checkpoint_path, map_location='cpu')
         
+        # Initialize VampPrior components for HVAE models if they exist in the checkpoint
+        state_dict = checkpoint_data['model_state_dict']
+        if 'vamp_means' in state_dict and hasattr(model, '_init_vampprior_components'):
+            # Detect latent spatial size from vamp_means shape: (K, C, S, S, S)
+            latent_spatial_size = state_dict['vamp_means'].shape[-1]
+            device = next(model.parameters()).device
+            model._init_vampprior_components(latent_spatial_size, device)
+        
         # Load model state
         model.load_state_dict(checkpoint_data['model_state_dict'])
         

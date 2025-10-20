@@ -122,10 +122,6 @@ class VAE(nn.Module):
         levels: (Deprecated) Number of downsampling levels
         logvar_mode: Variance modeling strategy ("learned", "fixed", or "scalar")
         fixed_logvar_value: Log-variance value when logvar_mode="fixed"
-        use_vampprior: Use VampPrior instead of standard Gaussian prior
-        vampprior_num_components: Number of VampPrior mixture components (K)
-        vampprior_chunk_size: Chunk size for VampPrior logsumexp computation
-        vampprior_init_strategy: Initialization strategy for VampPrior components
     """
 
     def __init__(
@@ -136,11 +132,7 @@ class VAE(nn.Module):
         base_channels: Optional[int] = None,  # Deprecated, for backward compatibility
         levels: Optional[int] = None,  # Deprecated, for backward compatibility
         logvar_mode: str = "learned",
-        fixed_logvar_value: float = 0.0,
-        use_vampprior: bool = False,
-        vampprior_num_components: int = 128,
-        vampprior_chunk_size: int = 32,
-        vampprior_init_strategy: str = "random"
+        fixed_logvar_value: float = 0.0
     ):
         super().__init__()
 
@@ -148,10 +140,6 @@ class VAE(nn.Module):
         self.latent_channels = latent_channels
         self.logvar_mode = logvar_mode
         self.fixed_logvar_value = fixed_logvar_value
-        self.use_vampprior = use_vampprior
-        self.vampprior_num_components = vampprior_num_components
-        self.vampprior_chunk_size = vampprior_chunk_size
-        self.vampprior_init_strategy = vampprior_init_strategy
 
         # Support backward compatibility with base_channels and levels
         if channel_schedule is None:
@@ -166,10 +154,6 @@ class VAE(nn.Module):
         # Track latent spatial size (inferred from first forward pass)
         self.latent_spatial_size: Optional[int] = None
 
-        # VampPrior components (initialized lazily on first forward pass)
-        self.vamp_means: Optional[nn.Parameter] = None
-        self.vamp_logvars: Optional[nn.Parameter] = None
-
         self.encoder = Encoder3D(
             input_channels,
             latent_channels,
@@ -179,43 +163,6 @@ class VAE(nn.Module):
         )
         self.decoder = Decoder3D(input_channels, latent_channels, channel_schedule)
 
-    def _init_vampprior_components(self, latent_size: int, device: torch.device):
-        """Initialize VampPrior component parameters.
-
-        Args:
-            latent_size: Spatial size of latent space (S for S³)
-            device: Device to create parameters on
-        """
-        if self.vamp_means is not None:
-            return  # Already initialized
-
-        K = self.vampprior_num_components
-        C = self.latent_channels
-
-        if self.vampprior_init_strategy == "random":
-            # Initialize means ~ N(0, 0.01²) and logvars = 0 (var = 1)
-            means = torch.randn(K, C, latent_size, latent_size, latent_size, device=device) * 0.01
-            logvars = torch.zeros(K, C, latent_size, latent_size, latent_size, device=device)
-        else:
-            # For "latent_kmeans", initialize randomly here and trainer will override
-            means = torch.randn(K, C, latent_size, latent_size, latent_size, device=device) * 0.01
-            logvars = torch.zeros(K, C, latent_size, latent_size, latent_size, device=device)
-
-        # Register as learnable parameters
-        self.vamp_means = nn.Parameter(means)
-        self.vamp_logvars = nn.Parameter(logvars)
-
-        print(f"VampPrior initialized: K={K}, shape=({K}, {C}, {latent_size}³)")
-
-    def get_vampprior_components(self) -> Optional[Tuple[torch.Tensor, torch.Tensor]]:
-        """Get VampPrior component parameters.
-
-        Returns:
-            (vamp_means, vamp_logvars) if VampPrior is enabled, else None
-        """
-        if not self.use_vampprior or self.vamp_means is None:
-            return None
-        return self.vamp_means, self.vamp_logvars
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         z, mu, logvar = self.encoder(x)
@@ -223,10 +170,6 @@ class VAE(nn.Module):
         # Cache latent spatial size from first forward pass
         if self.latent_spatial_size is None:
             self.latent_spatial_size = z.shape[2]  # Assuming cubic spatial dimensions
-
-        # Initialize VampPrior components on first forward pass
-        if self.use_vampprior and self.vamp_means is None:
-            self._init_vampprior_components(self.latent_spatial_size, x.device)
 
         x_recon = self.decoder(z)
         return x_recon, z, mu, logvar
@@ -270,19 +213,10 @@ class VAE(nn.Module):
             if self.latent_spatial_size is not None and latent_size != self.latent_spatial_size:
                 print(f"  WARNING: Requested latent_size ({latent_size}³) differs from cached size ({self.latent_spatial_size}³)")
 
-        # Sample from VampPrior mixture if enabled, otherwise from N(0,1)
-        if self.use_vampprior and self.vamp_means is not None:
-            # Sample from mixture: randomly select K components and draw from their Gaussians
-            K = self.vampprior_num_components
-            idx = torch.randint(0, K, (num_samples,), device=device)
-            mu_s = self.vamp_means[idx]  # (num_samples, C, S, S, S)
-            lv_s = self.vamp_logvars[idx]  # (num_samples, C, S, S, S)
-            z = mu_s + (0.5 * lv_s).exp() * torch.randn_like(mu_s)
-            print(f"VAE.sample: Sampling from VampPrior mixture (K={K}) with shape {z.shape}")
-        else:
-            z = torch.randn(
-                num_samples, self.latent_channels, latent_size, latent_size, latent_size, device=device
-            )
-            print(f"VAE.sample: Sampling from N(0,1) with shape {z.shape}")
+        # Sample from standard Gaussian prior N(0,1)
+        z = torch.randn(
+            num_samples, self.latent_channels, latent_size, latent_size, latent_size, device=device
+        )
+        print(f"VAE.sample: Sampling from N(0,1) with shape {z.shape}")
 
         return self.decode(z)

@@ -1,0 +1,86 @@
+# HVAE Training Configuration for frame-twin
+# This config trains a Hierarchical VAE with VampPrior on top latent
+
+[metadata]
+name = "lnp_hvae_training"
+description = "HVAE training for LNP voxel structure compression with hierarchical latent space"
+random_seed = 42
+
+[data]
+library_uuid = "REPLACE_WITH_LIBRARY_UUID"  # Use 'frame library list' to find UUID
+split_strategy = "random"  # or "stratified"
+train_ratio = 0.8
+val_ratio = 0.1
+test_ratio = 0.1
+# stratify_params = ["shell1_radius_nm", "shell2_probability"]  # for stratified splitting
+
+[model]
+type = "hvae"
+num_layers = 2  # 1 for standard VAE with VampPrior, 2 for hierarchical
+
+# Top latent (z2) - always present
+latent_channels_top = 16  # Smaller top latent for global structure
+channel_schedule_top = [32, 64, 128, 256]  # Channel schedule for top encoder
+spatial_size_top = 4  # 4³ top latent space
+
+# Bottom latent (z1) - only for 2-layer mode
+latent_channels_bottom = 32  # Larger bottom latent for local details
+channel_schedule_bottom = [64, 128, 256, 512]  # Channel schedule for bottom encoder
+spatial_size_bottom = 8  # 8³ bottom latent space
+
+# Decoder conditioning
+decoder_conditioning_type = "concat"  # "concat" or "film"
+
+# Logvar strategy
+logvar_mode = "learned"  # "learned", "fixed", or "scalar"
+fixed_logvar_value = 0.0
+
+# VampPrior configuration (on top latent)
+vampprior_num_components = 128  # Number of mixture components
+vampprior_chunk_size = 32  # Chunk size for memory efficiency
+vampprior_init_strategy = "random"  # "random" or "latent_kmeans"
+
+[training]
+device = "cuda"  # or "cpu", "mps"
+distributed = false  # Set true for DDP
+num_epochs = 100
+batch_size = 8  # Smaller batch size due to hierarchical architecture
+learning_rate = 1e-4
+optimizer = "adam"  # "adam", "adamw", or "sgd"
+scheduler = "cosine"  # "cosine", "step", or "none"
+num_workers = 4
+grad_clip = 1.0  # Gradient clipping value (None to disable)
+
+# KL annealing parameters
+kl_warmup_epochs = 10  # Linear KL warmup epochs
+kl_annealing_strategy = "linear"  # "linear" or "cyclical"
+
+[loss]
+reconstruction_weight = 1.0
+# Separate β weights for hierarchical model
+kl_weight_bottom = 0.001  # β1: weight for bottom KL (local details)
+kl_weight_top = 0.001     # β2: weight for top KL (global structure)
+reconstruction_type = "mse"  # "mse" | "l1" | "bce_logits" | "fractional_ce"
+mask_threshold = 0.005
+bg_weight = 0.0
+edge_weight = 0.1  # Edge-preserving loss weight
+
+# Free bits for bottom latent (prevents collapse)
+free_bits_bottom = 0.05  # Minimum KL per bottom latent dimension
+
+# VampPrior regularization
+vampprior_mu_reg = 0.0001  # L2 regularization on VampPrior means
+vampprior_logvar_reg = 0.0001  # L2 regularization on VampPrior logvars
+
+[checkpointing]
+experiments_dir = "/Users/tbm/frame_data/experiments"  # Base directory for experiments
+save_every_epochs = 10
+save_every_minutes = 60  # Time-based checkpointing
+keep_last_n = 3
+save_best = true  # Save best validation loss
+
+[logging]
+log_every_steps = 50
+n_recon_compare = 100  # Log reconstruction comparison every N steps
+n_analyze_latent = 200  # Analyze latent space every N steps (0=disabled)
+max_latent_analysis_samples = 128  # Max samples for latent histograms

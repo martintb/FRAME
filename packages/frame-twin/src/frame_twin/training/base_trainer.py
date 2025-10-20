@@ -441,7 +441,8 @@ class BaseTrainer:
         # Run a forward pass on a single example (no grad)
         self.model.eval()
         with torch.no_grad():
-            x_recon, _, _, _ = self.model(vox)
+            out = self.model(vox)
+            x_recon = out[0] if isinstance(out, (tuple, list)) else out
         self.model.train()
 
         # Select last item in batch for reproducibility
