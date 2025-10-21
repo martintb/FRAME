@@ -562,3 +562,58 @@ class HVAE(nn.Module):
             z_bottom = mu1_p + eps * std1_p
             
             return self.decode(z_top, z_bottom)
+
+    @torch.no_grad()
+    def sample_from_vampprior(self, batch_size: int = 1, device: Optional[torch.device] = None) -> torch.Tensor:
+        """Sample x ~ p(x): z2 ~ VampPrior; if 2-layer, z1 ~ p(z1|z2); then decode and return logits."""
+        self.eval()
+        if device is None:
+            device = next(self.parameters()).device
+        if self.vamp_means is None or self.vamp_logvars is None:
+            raise RuntimeError("VampPrior not initialized. Run a forward pass on data to initialize components.")
+        K = self.vamp_means.shape[0]
+
+        # Sample z2 from uniform mixture over components
+        comp_idx = torch.randint(0, K, (batch_size,), device=device)
+        mu_k = self.vamp_means[comp_idx]
+        lv_k = self.vamp_logvars[comp_idx]
+        std_k = (0.5 * lv_k.clamp(-15, 15)).exp()
+        z2 = mu_k + std_k * torch.randn_like(std_k)
+
+        if self.num_layers == 1:
+            return self.decode(z_top=z2)
+
+        # Conditional prior p(z1|z2)
+        mu1_p, lv1_p = self.prior_bottom(z2)
+        std1_p = (0.5 * lv1_p.clamp(-15, 15)).exp()
+        z1 = mu1_p + std1_p * torch.randn_like(std1_p)
+        return self.decode(z_top=z2, z_bottom=z1)
+
+    @torch.no_grad()
+    def encode_full(self, x: torch.Tensor):
+        """Return full stats: (z2, mu2, lv2, z1, mu1, lv1); bottom entries None in 1-layer mode."""
+        self.eval()
+        z2, mu2, lv2 = self.enc_top(x)
+        if self.num_layers == 1:
+            return z2, mu2, lv2, None, None, None
+        z1, mu1, lv1 = self.enc_bottom(x, z2)
+        return z2, mu2, lv2, z1, mu1, lv1
+
+    @torch.no_grad()
+    def perturb_latents(self, x: torch.Tensor, sigma_top: float = 0.3, sigma_bottom: float = 0.3,
+                        scale_by_std: bool = True) -> torch.Tensor:
+        """Encode x, add Gaussian noise in latent space (optionally scaled by posterior std), and decode."""
+        self.eval()
+        z2, mu2, lv2 = self.enc_top(x)
+        std2 = (0.5 * lv2.clamp(-15, 15)).exp()
+        eps2 = torch.randn_like(std2)
+        z2p = mu2 + (std2 * sigma_top * eps2 if scale_by_std else sigma_top * eps2)
+
+        if self.num_layers == 1:
+            return self.decode(z_top=z2p)
+
+        z1, mu1, lv1 = self.enc_bottom(x, z2)
+        std1 = (0.5 * lv1.clamp(-15, 15)).exp()
+        eps1 = torch.randn_like(std1)
+        z1p = mu1 + (std1 * sigma_bottom * eps1 if scale_by_std else sigma_bottom * eps1)
+        return self.decode(z_top=z2p, z_bottom=z1p)

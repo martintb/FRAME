@@ -17,6 +17,9 @@ from frame.storage import VoxelLibrary
 from frame.voxel_grid import VoxelGrid
 from frame.visualize_napari import NapariViewer
 
+from .models.hvae import HVAE
+import torch.nn.functional as F
+
 
 def _resolve_library_path(library_ref: str) -> tuple[Path, str]:
     """Resolve library reference to actual path and UUID.
@@ -1283,10 +1286,9 @@ def _generate_prior_sample_voxel(
 ) -> VoxelGrid:
     """Sample latent prior and return VoxelGrid."""
     with torch.no_grad():
-        # Handle different model types
-        if hasattr(model, 'num_layers'):  # HVAE model
-            logits = model.sample(num_samples=1, device=device, latent_size_top=latent_size)
-        else:  # VAE or UNetVAE
+        if isinstance(model, HVAE):
+            logits = model.sample_from_vampprior(batch_size=1, device=device)
+        else:
             logits = model.sample(num_samples=1, device=device, latent_size=latent_size)
         generated = _apply_activation(logits, reconstruction_type)
 
@@ -1494,16 +1496,13 @@ def perturb_structure_from_experiment(
     perturbed_voxels: List[VoxelGrid] = []
     with torch.no_grad():
         for idx in range(num_samples):
-            noise = torch.randn_like(mu) * sigma
-            latent_sample = mu + noise
             
             # Handle different decode signatures
-            if hasattr(model, 'num_layers'):  # HVAE model
-                if model.num_layers == 2:
-                    decoded_logits = model.decode(latent_sample, z_bottom)
-                else:  # 1-layer
-                    decoded_logits = model.decode(latent_sample)
+            if model.num_layers == 2:
+                decoded_logits = model.perturb_latents(input_tensor, sigma_top=sigma, sigma_bottom=sigma, scale_by_std=True)
             else:  # VAE or UNetVAE
+                noise = torch.randn_like(mu) * sigma
+                latent_sample = mu + noise
                 decoded_logits = model.decode(latent_sample)
             
             decoded_tensor = _apply_activation(decoded_logits, reconstruction_type).squeeze(0).cpu().float()
