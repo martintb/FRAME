@@ -70,8 +70,8 @@ def log_Bernoulli(x, mean, average=False, reduce=True, dim=None):
 def log_Logistic_256(x, mean, logvar, average=False, reduce=True, dim=None):
     """Discretized logistic distribution for continuous [0,1] data.
 
-    Implementation follows the reference for 256-level discretization.
-    Returns POSITIVE log-likelihood (consistent with other distribution functions).
+    Implementation follows the reference for 256-level discretization and
+    returns log-likelihood values (typically non-positive).
 
     Args:
         x: Input tensor in [0,1]
@@ -82,7 +82,7 @@ def log_Logistic_256(x, mean, logvar, average=False, reduce=True, dim=None):
         dim: Dimension to sum/mean over
 
     Returns:
-        POSITIVE log-likelihood summed or averaged over specified dimension
+        Log-likelihood summed or averaged over specified dimension
     """
     bin_size = 1. / 256.
 
@@ -98,7 +98,7 @@ def log_Logistic_256(x, mean, logvar, average=False, reduce=True, dim=None):
     cdf_plus = torch.sigmoid(x + bin_size/scale)
     cdf_minus = torch.sigmoid(x)
 
-    # Return POSITIVE log-likelihood (consistent with log_Normal_diag and log_Bernoulli)
+    # Return log-likelihood (typically non-positive)
     log_logist_256 = torch.log(cdf_plus - cdf_minus + 1.e-7)
 
     if reduce:

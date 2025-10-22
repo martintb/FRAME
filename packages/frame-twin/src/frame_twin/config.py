@@ -25,6 +25,25 @@ class DataConfig(BaseModel):
     # Data augmentation options
     random_crop_size: Optional[int] = Field(None, gt=0, description="Size of random crops for training (e.g., 64 for 64^3)")
     random_rotation: bool = Field(False, description="Apply random 90-degree rotations and flips")
+    reject_water_only_crops: bool = Field(
+        False,
+        description="Resample random crops that contain only the water/background channel"
+    )
+    water_channel_index: Optional[int] = Field(
+        None,
+        ge=0,
+        description="Index of the water/background channel (defaults to last channel when omitted)"
+    )
+    max_water_crop_attempts: int = Field(
+        8,
+        gt=0,
+        description="Maximum number of times to resample a crop when rejecting water-only crops"
+    )
+    water_only_tolerance: float = Field(
+        1e-6,
+        ge=0.0,
+        description="Tolerance used to decide if non-water channels are empty when rejecting crops"
+    )
 
     @validator('test_ratio')
     def validate_ratios(cls, v, values):

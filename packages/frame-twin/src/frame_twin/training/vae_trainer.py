@@ -223,11 +223,13 @@ class VAETrainer(BaseTrainer):
             # Get VampPrior components (direct latent space)
             vamp_means = self.model.vamp_means
             vamp_logvars = self.model.vamp_logvars
-            
+            current_kl_weight = self._current_kl_weight()
+
             total_loss, recon_loss, kl_loss = self.loss_fn(
                 voxels, x_recon, x_logvar, z1_q, z1_q_mean, z1_q_logvar,
                 z2_q, z2_q_mean, z2_q_logvar, z1_p_mean, z1_p_logvar,
-                vamp_means, vamp_logvars, self.model.vampprior_num_components
+                vamp_means, vamp_logvars, self.model.vampprior_num_components,
+                beta=current_kl_weight
             )
         else:
             total_loss_static, recon_loss, kl_loss, data_recon, bg_penalty, edge_loss, kl_total, vamp_reg = self.loss_fn(
@@ -241,8 +243,8 @@ class VAETrainer(BaseTrainer):
                          current_kl_weight_bottom * kl_bottom + 
                          current_kl_weight_top * kl_top)
         elif getattr(self, 'is_vp_hvae', False):
-            # vpHVAE loss is already computed with beta weight
-            pass  # total_loss is already computed in loss_fn
+            # total_loss already incorporates current KL weight via loss_fn
+            pass
         else:
             current_kl_weight = self._current_kl_weight()
             total_loss = self.loss_fn.reconstruction_weight * recon_loss + current_kl_weight * kl_loss
@@ -290,7 +292,8 @@ class VAETrainer(BaseTrainer):
                 'kl_loss': kl_loss.item(),
                 'kl_z1': (kl_z1.mean() / num_dims).item(),  # Bottom latent KL
                 'kl_z2': (kl_z2.mean() / num_dims).item(),  # Top latent KL
-                'beta': self.loss_fn.beta,  # KL weight
+                'kl_weight': float(current_kl_weight),
+                'kl_weight_base': float(self.loss_fn.kl_weight),
                 'z1_mean_norm': z1_q_mean.norm(dim=1).mean().item(),  # Monitor latent magnitudes
                 'z2_mean_norm': z2_q_mean.norm(dim=1).mean().item(),
                 'z1_std_mean': (0.5 * z1_q_logvar).exp().mean().item(),  # Average std

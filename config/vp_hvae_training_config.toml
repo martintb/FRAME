@@ -12,13 +12,16 @@ test_ratio = 0.1
 # Data augmentation
 random_crop_size = 64  # Train on random 64^3 crops
 random_rotation = true  # Apply random 90-degree rotations and flips
+reject_water_only_crops = true  # Skip crops that contain only water/background
+water_channel_index = 9  # Treat the 10th channel (0-based index 9) as water/background
+max_water_crop_attempts = 16  # Retry random crops up to this many times
 
 [model]
 type = "vp_hvae"
 input_channels = 10
-z1_size = 40
-z2_size = 40
-vampprior_num_components = 128
+z1_size = 24
+z2_size = 24
+vampprior_num_components = 64
 vampprior_init_strategy = "random"
 input_type = "continuous"
 input_resolution = 64  # Training resolution (matches random_crop_size)
@@ -26,7 +29,7 @@ input_resolution = 64  # Training resolution (matches random_crop_size)
 [training]
 device = "mps"
 num_epochs = 200
-batch_size = 32
+batch_size = 16
 learning_rate = 0.0005
 optimizer = "adam"
 scheduler = "cosine"
@@ -34,7 +37,7 @@ num_workers = 0
 grad_clip = 1.0
 
 # KL annealing parameters - linear warmup matching reference implementation
-kl_warmup_epochs = 100  # Linear warmup over 100 epochs (matches VampPrior reference)
+kl_warmup_epochs = 20  # Linear warmup over 100 epochs (matches VampPrior reference)
 kl_annealing_strategy = "linear"  # "linear" for one-time warmup (reference uses this)
 
 [loss]

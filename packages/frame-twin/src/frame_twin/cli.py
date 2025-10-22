@@ -389,8 +389,12 @@ def train_vae(config_path: str):
         device=None,
         num_workers=config.training.num_workers,
         pin_memory=pin_memory,
-        random_crop_size=getattr(config.data, 'random_crop_size', None),
-        random_rotation=getattr(config.data, 'random_rotation', False)
+        random_crop_size=config.data.random_crop_size,
+        random_rotation=config.data.random_rotation,
+        reject_water_only_crops=config.data.reject_water_only_crops,
+        water_channel_index=config.data.water_channel_index,
+        max_water_crop_attempts=config.data.max_water_crop_attempts,
+        water_only_tolerance=config.data.water_only_tolerance
     )
     train_loader = loaders['train']
     val_loader = loaders['val']
@@ -447,8 +451,12 @@ def train_vae_with_checkpoint(config_path: str, experiment, checkpoint_path: str
         device=None,
         num_workers=config.training.num_workers,
         pin_memory=pin_memory,
-        random_crop_size=getattr(config.data, 'random_crop_size', None),
-        random_rotation=getattr(config.data, 'random_rotation', False)
+        random_crop_size=config.data.random_crop_size,
+        random_rotation=config.data.random_rotation,
+        reject_water_only_crops=config.data.reject_water_only_crops,
+        water_channel_index=config.data.water_channel_index,
+        max_water_crop_attempts=config.data.max_water_crop_attempts,
+        water_only_tolerance=config.data.water_only_tolerance
     )
     train_loader = loaders['train']
     val_loader = loaders['val']
@@ -529,8 +537,12 @@ def train_ddpm(config_path: str):
         device=None,
         num_workers=config.training.num_workers,
         pin_memory=pin_memory,
-        random_crop_size=getattr(config.data, 'random_crop_size', None),
-        random_rotation=getattr(config.data, 'random_rotation', False)
+        random_crop_size=config.data.random_crop_size,
+        random_rotation=config.data.random_rotation,
+        reject_water_only_crops=config.data.reject_water_only_crops,
+        water_channel_index=config.data.water_channel_index,
+        max_water_crop_attempts=config.data.max_water_crop_attempts,
+        water_only_tolerance=config.data.water_only_tolerance
     )
     train_loader = loaders['train']
     val_loader = loaders['val']
@@ -587,8 +599,12 @@ def train_ddpm_with_checkpoint(config_path: str, experiment, checkpoint_path: st
         device=None,
         num_workers=config.training.num_workers,
         pin_memory=pin_memory,
-        random_crop_size=getattr(config.data, 'random_crop_size', None),
-        random_rotation=getattr(config.data, 'random_rotation', False)
+        random_crop_size=config.data.random_crop_size,
+        random_rotation=config.data.random_rotation,
+        reject_water_only_crops=config.data.reject_water_only_crops,
+        water_channel_index=config.data.water_channel_index,
+        max_water_crop_attempts=config.data.max_water_crop_attempts,
+        water_only_tolerance=config.data.water_only_tolerance
     )
     train_loader = loaders['train']
     val_loader = loaders['val']

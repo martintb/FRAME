@@ -1,6 +1,8 @@
 """VampPrior Hierarchical VAE loss function."""
 
 import math
+from typing import Optional
+
 import torch
 import torch.nn as nn
 
@@ -10,18 +12,20 @@ from .distributions import log_Normal_diag, log_Bernoulli, log_Logistic_256
 class VpHVAELoss(nn.Module):
     """VampPrior HVAE loss following reference implementation exactly.
     
-    Loss formulation: loss = -RE + beta * KL
-    where KL = -(log_p_z1 + log_p_z2 - log_q_z1 - log_q_z2)
+    Loss formulation (per sample, normalized by voxels): loss = RE + beta * KL
+    with KL = -(log_p_z1 + log_p_z2 - log_q_z1 - log_q_z2)
     """
     
     def __init__(self, input_type='continuous', beta=1.0):
         super().__init__()
         self.input_type = input_type
-        self.beta = beta
+        self.beta = beta  # Base KL weight
+        self.kl_weight = beta  # Alias for scheduler compatibility
     
     def forward(self, x, x_mean, x_logvar, z1_q, z1_q_mean, z1_q_logvar,
                 z2_q, z2_q_mean, z2_q_logvar, z1_p_mean, z1_p_logvar,
-                vamp_means, vamp_logvars, num_components):
+                vamp_means, vamp_logvars, num_components,
+                beta: Optional[float] = None):
         """Compute VpHVAE loss.
         
         Args:
@@ -36,6 +40,7 @@ class VpHVAELoss(nn.Module):
             vamp_means: VampPrior component means (K, z2_size)
             vamp_logvars: VampPrior component logvars (K, z2_size)
             num_components: Number of VampPrior components (K)
+            beta: Optional override for KL weight (used for annealing schedules)
         
         Returns:
             loss: Total loss (scalar)
@@ -43,15 +48,15 @@ class VpHVAELoss(nn.Module):
             KL: KL divergence loss (scalar)
         """
         # Reconstruction log-likelihood (per sample, summed over all voxels and channels)
-        # Both log_Bernoulli and log_Logistic_256 return POSITIVE log-likelihood
         if self.input_type == 'binary':
-            RE = log_Bernoulli(x, x_mean, reduce=False)  # per-element, no reduction
-            RE = RE.view(x.size(0), -1).sum(1)  # Sum over all voxels/channels -> (B,)
+            log_px = log_Bernoulli(x, x_mean, reduce=False)  # per-element, no reduction
         elif self.input_type == 'continuous':
-            RE = log_Logistic_256(x, x_mean, x_logvar, reduce=False)  # per-element, no reduction
-            RE = RE.view(x.size(0), -1).sum(1)  # Sum over all voxels/channels -> (B,)
+            log_px = log_Logistic_256(x, x_mean, x_logvar, reduce=False)  # per-element, no reduction
         else:
             raise ValueError(f"Unknown input_type: {self.input_type}")
+
+        # Convert log-likelihood to positive reconstruction loss
+        RE = -log_px.view(x.size(0), -1).sum(1)  # Sum over all voxels/channels -> (B,)
 
         # KL components (per sample, summed over latent dims)
         log_p_z1 = log_Normal_diag(z1_q, z1_p_mean, z1_p_logvar, dim=1)  # sum over z1 dims
@@ -65,8 +70,11 @@ class VpHVAELoss(nn.Module):
         # This makes the loss comparable across different input resolutions (64³ vs 128³)
         num_dims = x[0].numel()  # Total dims per sample (C * D * H * W)
 
+        # Determine effective KL weight (supports annealing)
+        effective_beta = self.beta if beta is None else beta
+
         # Total loss (normalized per dimension)
-        loss = (-RE + self.beta * KL) / num_dims
+        loss = (RE + effective_beta * KL) / num_dims
 
         # Average over batch and normalize components for logging
         return torch.mean(loss), torch.mean(RE) / num_dims, torch.mean(KL) / num_dims
