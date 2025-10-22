@@ -133,6 +133,17 @@ class HVAEModelConfig(BaseModel):
         return v
 
 
+class VpHVAEModelConfig(BaseModel):
+    """VampPrior HVAE model configuration."""
+    type: Literal["vp_hvae"] = "vp_hvae"
+    input_channels: int = Field(10, gt=0, description="Number of input channels")
+    z1_size: int = Field(40, gt=0, description="Bottom latent dimension")
+    z2_size: int = Field(40, gt=0, description="Top latent dimension")
+    vampprior_num_components: int = Field(128, gt=0, description="Number of VampPrior components")
+    vampprior_init_strategy: Literal["random", "data"] = Field("random", description="VampPrior initialization strategy")
+    input_type: Literal["continuous", "binary"] = Field("continuous", description="Input data type")
+
+
 class DDPMConditioningConfig(BaseModel):
     """DDPM conditioning configuration."""
     # For concatenation strategy
@@ -273,7 +284,7 @@ class VAEConfig(BaseModel):
     """Complete VAE training configuration."""
     metadata: MetadataConfig
     data: DataConfig
-    model: Union[VAEModelConfig, HVAEModelConfig]
+    model: Union[VAEModelConfig, HVAEModelConfig, VpHVAEModelConfig]
     training: TrainingConfig
     loss: LossConfig
     checkpointing: CheckpointingConfig

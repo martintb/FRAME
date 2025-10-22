@@ -310,12 +310,12 @@ def train(config_path: str):
     model_type = config_data.get('model', {}).get('type')
     print(f"Detected model type: {model_type}")
     
-    if model_type in ['vae', 'unet_vae', 'hvae']:
+    if model_type in ['vae', 'unet_vae', 'hvae', 'vp_hvae']:
         train_vae(config_path)
     elif model_type == 'ddpm':
         train_ddpm(config_path)
     else:
-        raise ValueError(f"Unknown model type: {model_type}. Expected 'vae', 'unet_vae', 'hvae', or 'ddpm'")
+        raise ValueError(f"Unknown model type: {model_type}. Expected 'vae', 'unet_vae', 'hvae', 'vp_hvae', or 'ddpm'")
 
 
 def train_vae(config_path: str):
@@ -347,6 +347,11 @@ def train_vae(config_path: str):
         tags.append(f"latent-top-{config.model.latent_channels_top}")
         if config.model.latent_channels_bottom is not None:
             tags.append(f"latent-bottom-{config.model.latent_channels_bottom}")
+    elif config.model.type == "vp_hvae":
+        # VampPrior HVAE models have 'z1_size' and 'z2_size'
+        tags.append(f"z1-{config.model.z1_size}")
+        tags.append(f"z2-{config.model.z2_size}")
+        tags.append(f"vamp-{config.model.vampprior_num_components}")
 
     experiment = exp_mgr.create_experiment(
         name=config.metadata.name,
@@ -725,9 +730,9 @@ def continue_training(experiment_uuid: str, config_path: Optional[str] = None):
         print(f"Using original config: {config_file}")
     
     # Load config and determine model type
-    if experiment.model_type in ['vae', 'unet_vae', 'hvae']:
+    if experiment.model_type in ['vae', 'unet_vae', 'hvae', 'vp_hvae']:
         config = VAEConfig.from_toml(str(config_file))
-        print("Resuming VAE/HVAE training...")
+        print("Resuming VAE/HVAE/VP-HVAE training...")
         
         # Create a new experiment for continuation
         exp_mgr = ExperimentManager()
@@ -1044,7 +1049,7 @@ max_latent_analysis_samples = 128  # Max samples for latent histograms
 """
     
     else:
-        raise ValueError(f"Unknown model type: {model_type}. Expected 'vae', 'unet_vae', 'hvae', or 'ddpm'")
+        raise ValueError(f"Unknown model type: {model_type}. Expected 'vae', 'unet_vae', 'hvae', 'vp_hvae', or 'ddpm'")
     
     # Write template to file
     output_path.parent.mkdir(parents=True, exist_ok=True)

@@ -61,6 +61,19 @@ class VAETrainer(BaseTrainer):
                 input_spatial_size=config.model.input_spatial_size
             )
             self.is_hvae = True
+        elif config.model.type == "vp_hvae":
+            from ..models import VpHVAE
+            model = VpHVAE(
+                input_channels=config.model.input_channels,
+                z1_size=config.model.z1_size,
+                z2_size=config.model.z2_size,
+                vampprior_num_components=config.model.vampprior_num_components,
+                vampprior_init_strategy=config.model.vampprior_init_strategy,
+                input_type=config.model.input_type,
+                input_resolution=getattr(config.model, 'input_resolution', 64)  # Default to 64 if not specified
+            )
+            self.is_hvae = False
+            self.is_vp_hvae = True
         else:
             raise ValueError(f"Unknown model type: {config.model.type}")
         
@@ -80,6 +93,12 @@ class VAETrainer(BaseTrainer):
                 vampprior_mu_reg=getattr(config.loss, 'vampprior_mu_reg', 0.0001) or 0.0001,
                 vampprior_logvar_reg=getattr(config.loss, 'vampprior_logvar_reg', 0.0001) or 0.0001,
                 model=model
+            )
+        elif getattr(self, 'is_vp_hvae', False):
+            from ..losses import VpHVAELoss
+            loss_fn = VpHVAELoss(
+                input_type=config.model.input_type,
+                beta=config.loss.kl_weight or 1.0
             )
         else:
             loss_fn = VAELoss(
@@ -190,6 +209,8 @@ class VAETrainer(BaseTrainer):
         # Forward pass
         if self.is_hvae:
             x_recon, z_top, mu_top, logvar_top, z_bottom, mu_bottom, logvar_bottom, prior_params = self.model(voxels)
+        elif getattr(self, 'is_vp_hvae', False):
+            x_recon, x_logvar, z1_q, z1_q_mean, z1_q_logvar, z2_q, z2_q_mean, z2_q_logvar, z1_p_mean, z1_p_logvar = self.model(voxels)
         else:
             x_recon, z, mu, logvar = self.model(voxels)
 
@@ -197,6 +218,16 @@ class VAETrainer(BaseTrainer):
         if self.is_hvae:
             total_loss_static, recon_loss, kl_bottom, kl_top, data_recon, bg_penalty, edge_loss, kl_total, vamp_reg = self.loss_fn(
                 x_recon, voxels, mu_top, logvar_top, z_top, mu_bottom, logvar_bottom, z_bottom, prior_params
+            )
+        elif getattr(self, 'is_vp_hvae', False):
+            # Get VampPrior components (direct latent space)
+            vamp_means = self.model.vamp_means
+            vamp_logvars = self.model.vamp_logvars
+            
+            total_loss, recon_loss, kl_loss = self.loss_fn(
+                voxels, x_recon, x_logvar, z1_q, z1_q_mean, z1_q_logvar,
+                z2_q, z2_q_mean, z2_q_logvar, z1_p_mean, z1_p_logvar,
+                vamp_means, vamp_logvars, self.model.vampprior_num_components
             )
         else:
             total_loss_static, recon_loss, kl_loss, data_recon, bg_penalty, edge_loss, kl_total, vamp_reg = self.loss_fn(
@@ -209,12 +240,15 @@ class VAETrainer(BaseTrainer):
             total_loss = (self.loss_fn.reconstruction_weight * recon_loss + 
                          current_kl_weight_bottom * kl_bottom + 
                          current_kl_weight_top * kl_top)
+        elif getattr(self, 'is_vp_hvae', False):
+            # vpHVAE loss is already computed with beta weight
+            pass  # total_loss is already computed in loss_fn
         else:
             current_kl_weight = self._current_kl_weight()
             total_loss = self.loss_fn.reconstruction_weight * recon_loss + current_kl_weight * kl_loss
 
         # Add VampPrior regularization if enabled (not affected by KL warmup)
-        if vamp_reg.item() > 0:
+        if not getattr(self, 'is_vp_hvae', False) and vamp_reg.item() > 0:
             total_loss = total_loss + vamp_reg
 
         # Metrics
@@ -233,6 +267,36 @@ class VAETrainer(BaseTrainer):
                 'vamp_reg': vamp_reg.item(),
             }
             latent_tuple = (z_top, mu_top, logvar_top, z_bottom, mu_bottom, logvar_bottom)
+        elif getattr(self, 'is_vp_hvae', False):
+            # Compute individual KL components for detailed monitoring
+            from ..losses.distributions import log_Normal_diag
+
+            # KL(q(z1|x,z2) || p(z1|z2))
+            log_p_z1 = log_Normal_diag(z1_q, z1_p_mean, z1_p_logvar, dim=1)
+            log_q_z1 = log_Normal_diag(z1_q, z1_q_mean, z1_q_logvar, dim=1)
+            kl_z1 = -(log_p_z1 - log_q_z1)
+
+            # KL(q(z2|x) || p(z2)) - VampPrior
+            log_p_z2 = self.model.log_p_z2(z2_q)
+            log_q_z2 = log_Normal_diag(z2_q, z2_q_mean, z2_q_logvar, dim=1)
+            kl_z2 = -(log_p_z2 - log_q_z2)
+
+            # Normalize by num_dims for consistency
+            num_dims = voxels[0].numel()
+
+            metrics = {
+                'total_loss': total_loss.item(),
+                'recon_loss': recon_loss.item(),
+                'kl_loss': kl_loss.item(),
+                'kl_z1': (kl_z1.mean() / num_dims).item(),  # Bottom latent KL
+                'kl_z2': (kl_z2.mean() / num_dims).item(),  # Top latent KL
+                'beta': self.loss_fn.beta,  # KL weight
+                'z1_mean_norm': z1_q_mean.norm(dim=1).mean().item(),  # Monitor latent magnitudes
+                'z2_mean_norm': z2_q_mean.norm(dim=1).mean().item(),
+                'z1_std_mean': (0.5 * z1_q_logvar).exp().mean().item(),  # Average std
+                'z2_std_mean': (0.5 * z2_q_logvar).exp().mean().item(),
+            }
+            latent_tuple = (z1_q, z1_q_mean, z1_q_logvar, z2_q, z2_q_mean, z2_q_logvar)
         else:
             metrics = {
                 'total_loss': total_loss.item(),
@@ -340,21 +404,29 @@ class VAETrainer(BaseTrainer):
 
         Args:
             latent_tuple: Either (z, mu, logvar) for VAE or
-                         (z_top, mu_top, logvar_top, z_bottom, mu_bottom, logvar_bottom) for HVAE
+                         (z_top, mu_top, logvar_top, z_bottom, mu_bottom, logvar_bottom) for HVAE or
+                         (z1_q, z1_q_mean, z1_q_logvar, z2_q, z2_q_mean, z2_q_logvar) for VP-HVAE
             step: Current global step
         """
         if self.writer is None:
             return
 
-        # Determine if this is VAE (3-tuple) or HVAE (6-tuple)
+        # Determine model type by checking latent shape
         if len(latent_tuple) == 3:
             # VAE: log latents as before
             self._log_latent_statistics(latent_tuple[0], latent_tuple[1], latent_tuple[2], "latent", step)
         elif len(latent_tuple) == 6:
-            # HVAE: log top and bottom latents separately
-            z_top, mu_top, logvar_top, z_bottom, mu_bottom, logvar_bottom = latent_tuple
-            self._log_latent_statistics(z_top, mu_top, logvar_top, "latent_top", step)
-            self._log_latent_statistics(z_bottom, mu_bottom, logvar_bottom, "latent_bottom", step)
+            # Check if this is VP-HVAE (1D latents) or HVAE (spatial latents)
+            z_first = latent_tuple[0]
+            if len(z_first.shape) == 2:  # VP-HVAE: (B, latent_dim)
+                # VP-HVAE with 1D latents
+                z1_q, z1_q_mean, z1_q_logvar, z2_q, z2_q_mean, z2_q_logvar = latent_tuple
+                self._log_vp_hvae_latent_statistics(z1_q, z1_q_mean, z1_q_logvar, "latent_z1", step)
+                self._log_vp_hvae_latent_statistics(z2_q, z2_q_mean, z2_q_logvar, "latent_z2", step)
+            else:  # HVAE: spatial latents
+                z_top, mu_top, logvar_top, z_bottom, mu_bottom, logvar_bottom = latent_tuple
+                self._log_latent_statistics(z_top, mu_top, logvar_top, "latent_top", step)
+                self._log_latent_statistics(z_bottom, mu_bottom, logvar_bottom, "latent_bottom", step)
         else:
             print(f"Warning: Unexpected latent_tuple length {len(latent_tuple)}")
 
@@ -425,7 +497,84 @@ class VAETrainer(BaseTrainer):
             ax.set_ylabel("PC2")
             self.writer.add_figure(f"{prefix}/pca_scatter", fig, step)
             plt.close(fig)
-    
+
+    def _log_vp_hvae_latent_statistics(self, z: torch.Tensor, mu: torch.Tensor, logvar: torch.Tensor, prefix: str, step: int):
+        """Log latent statistics for VP-HVAE (1D latent vectors).
+
+        Args:
+            z: Latent samples (B, latent_dim)
+            mu: Latent means (B, latent_dim)
+            logvar: Latent log-variances (B, latent_dim)
+            prefix: Prefix for TensorBoard tags (e.g., "latent_z1", "latent_z2")
+            step: Current global step
+        """
+        with torch.no_grad():
+            # Subsample batch if too large
+            B, D = mu.shape
+            max_samples = self.config.logging.max_latent_analysis_samples
+            if B > max_samples:
+                indices = torch.randperm(B)[:max_samples]
+                mu = mu[indices]
+                logvar = logvar[indices]
+                z = z[indices]
+                B = max_samples
+
+            std = (0.5 * logvar).exp()
+
+            # Log overall histograms
+            self.writer.add_histogram(f"{prefix}/mu_all", mu.detach().cpu().flatten(), step)
+            self.writer.add_histogram(f"{prefix}/std_all", std.detach().cpu().flatten(), step)
+            self.writer.add_histogram(f"{prefix}/z_all", z.detach().cpu().flatten(), step)
+
+            # Per-dimension histograms (first 8 dimensions)
+            max_dims_to_log = min(D, 8)
+            for i in range(max_dims_to_log):
+                self.writer.add_histogram(f"{prefix}/mu_dim_{i}", mu[:, i].detach().cpu(), step)
+                self.writer.add_histogram(f"{prefix}/std_dim_{i}", std[:, i].detach().cpu(), step)
+                self.writer.add_histogram(f"{prefix}/z_dim_{i}", z[:, i].detach().cpu(), step)
+
+            # Per-dim KL divergence KL(q(z) || N(0,1))
+            kl_per_dim = 0.5 * (mu.pow(2) + std.pow(2) - 1.0 - 2 * std.log())
+            self.writer.add_histogram(f"{prefix}/kl_per_dim", kl_per_dim.detach().cpu().flatten(), step)
+            self.writer.add_scalar(f"{prefix}/kl_total_nats", kl_per_dim.sum(dim=1).mean().item(), step)
+
+            # Z norm distribution
+            z_norm = z.norm(dim=1)  # (B,)
+            self.writer.add_histogram(f"{prefix}/z_norm", z_norm.detach().cpu(), step)
+
+            # Summary statistics
+            self.writer.add_scalar(f"{prefix}/mu_mean", mu.mean().item(), step)
+            self.writer.add_scalar(f"{prefix}/mu_std", mu.std().item(), step)
+            self.writer.add_scalar(f"{prefix}/std_mean", std.mean().item(), step)
+            self.writer.add_scalar(f"{prefix}/z_mean", z.mean().item(), step)
+            self.writer.add_scalar(f"{prefix}/z_std", z.std().item(), step)
+
+            # Activation statistics (how many dims are active)
+            active_dims = (mu.abs() > 0.1).float().mean(dim=0)  # Per dimension
+            self.writer.add_scalar(f"{prefix}/active_dims_ratio", active_dims.mean().item(), step)
+
+            # PCA scatter plot
+            Z = z.detach().cpu()  # (B, D)
+            if D >= 2:
+                Zc = Z - Z.mean(0, keepdim=True)
+                U, S, Vt = torch.linalg.svd(Zc, full_matrices=False)
+                Z2 = Zc @ Vt[:2].T  # (B, 2)
+
+                import matplotlib.pyplot as plt
+                fig = plt.figure(figsize=(3.2, 3.2))
+                ax = fig.add_subplot(111)
+                ax.scatter(Z2[:, 0].numpy(), Z2[:, 1].numpy(), s=6, alpha=0.6)
+                ax.set_title(f"Latent space: PCA ({prefix})")
+                ax.set_xlabel("PC1")
+                ax.set_ylabel("PC2")
+                self.writer.add_figure(f"{prefix}/pca_scatter", fig, step)
+                plt.close(fig)
+
+                # Log explained variance
+                explained_var = (S ** 2) / (S ** 2).sum()
+                for i in range(min(5, len(explained_var))):
+                    self.writer.add_scalar(f"{prefix}/pca_var_pc{i+1}", explained_var[i].item(), step)
+
     def train(self, start_epoch: int = 0) -> None:
         """Train the VAE model."""
         if self.train_loader is None or self.val_loader is None:
