@@ -50,13 +50,23 @@ class VpHVAELoss(nn.Module):
         # Reconstruction log-likelihood (per sample, summed over all voxels and channels)
         if self.input_type == 'binary':
             log_px = log_Bernoulli(x, x_mean, reduce=False)  # per-element, no reduction
+            RE = -log_px.view(x.size(0), -1).sum(1)  # (B,)
         elif self.input_type == 'continuous':
             log_px = log_Logistic_256(x, x_mean, x_logvar, reduce=False)  # per-element, no reduction
+            RE = -log_px.view(x.size(0), -1).sum(1)  # (B,)
+        elif self.input_type == 'fractional':
+            # x: fractional targets on simplex per voxel (sums to 1 across channels) or all-zero for empty
+            # x_mean: logits from decoder with shape (B,C,D,H,W)
+            # Compute soft-label cross-entropy over channels and ignore empty voxels
+            # Valid mask where any channel present
+            with torch.no_grad():
+                valid = (x.sum(dim=1, keepdim=True) > 0).float()  # [B,1,D,H,W]
+            logp = torch.log_softmax(x_mean, dim=1)  # [B,C,D,H,W]
+            ce = -(x * logp).sum(dim=1)  # [B,D,H,W]
+            # Sum CE over valid voxels per sample
+            RE = (ce * valid.squeeze(1)).view(x.size(0), -1).sum(1)  # (B,)
         else:
             raise ValueError(f"Unknown input_type: {self.input_type}")
-
-        # Convert log-likelihood to positive reconstruction loss
-        RE = -log_px.view(x.size(0), -1).sum(1)  # Sum over all voxels/channels -> (B,)
 
         # KL components (per sample, summed over latent dims)
         log_p_z1 = log_Normal_diag(z1_q, z1_p_mean, z1_p_logvar, dim=1)  # sum over z1 dims

@@ -118,6 +118,11 @@ class VpHVAE(nn.Module):
         elif input_type == 'continuous':
             self.p_x_mean = Conv3d(64, input_channels, 1, 1, 0, activation=nn.Sigmoid())
             self.p_x_logvar = Conv3d(64, input_channels, 1, 1, 0, activation=nn.Hardtanh(min_val=-4.5, max_val=0.))
+        elif input_type == 'fractional':
+            # For multi-channel fractional targets on the simplex (sum to 1), we output logits
+            # and use soft-label cross-entropy in the loss. No per-channel variance is used.
+            self.p_x_mean = Conv3d(64, input_channels, 1, 1, 0, activation=None)  # logits
+            self.p_x_logvar = None
         
         # Initialize weights
         for m in self.modules():
@@ -259,10 +264,15 @@ class VpHVAE(nn.Module):
         x_mean = self.p_x_mean(h_decoder)
         if self.input_type == 'binary':
             x_logvar = 0.
-        else:
+        elif self.input_type == 'continuous':
             # Note: Sigmoid in p_x_mean already ensures x_mean is in (0,1)
             # Clamping is applied in the loss function during discretization
             x_logvar = self.p_x_logvar(h_decoder)
+        elif self.input_type == 'fractional':
+            # Fractional/simplex outputs use logits only; no variance term
+            x_logvar = 0.
+        else:
+            raise ValueError(f"Unknown input_type: {self.input_type}")
 
         return x_mean, x_logvar
     

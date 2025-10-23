@@ -160,7 +160,7 @@ class VpHVAEModelConfig(BaseModel):
     z2_size: int = Field(40, gt=0, description="Top latent dimension")
     vampprior_num_components: int = Field(128, gt=0, description="Number of VampPrior components")
     vampprior_init_strategy: Literal["random", "data"] = Field("random", description="VampPrior initialization strategy")
-    input_type: Literal["continuous", "binary"] = Field("continuous", description="Input data type")
+    input_type: Literal["continuous", "binary", "fractional"] = Field("continuous", description="Input data type")
 
 
 class DDPMConditioningConfig(BaseModel):
