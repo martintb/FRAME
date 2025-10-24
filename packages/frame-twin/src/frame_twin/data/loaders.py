@@ -84,10 +84,10 @@ def create_data_loaders(
     pin_memory: bool = True,
     random_crop_size: Optional[int] = None,
     random_rotation: bool = False,
-    reject_water_only_crops: bool = False,
-    water_channel_index: Optional[int] = None,
-    max_water_crop_attempts: int = 8,
-    water_only_tolerance: float = 1e-6
+    reject_bg_only_crops: bool = False,
+    bg_channel_index: Optional[int] = None,
+    max_bg_crop_attempts: int = 8,
+    bg_only_tolerance: float = 1e-6
 ) -> Dict[str, DataLoader]:
     """
     Create DataLoaders for train/val/test splits.
@@ -103,10 +103,10 @@ def create_data_loaders(
         pin_memory: Whether to pin memory for faster GPU transfer
         random_crop_size: Optional random crop size for training augmentation
         random_rotation: Whether to apply random rotations/flips for training
-        reject_water_only_crops: Resample random crops containing only water/background channel
-        water_channel_index: Index of the water/background channel (defaults to last channel when None)
-        max_water_crop_attempts: Maximum number of re-sampling attempts for water-only crops
-        water_only_tolerance: Tolerance when checking if non-water channels are empty
+        reject_bg_only_crops: Resample random crops containing only the designated background channel
+        bg_channel_index: Index of the background channel (defaults to last channel when None)
+        max_bg_crop_attempts: Maximum number of re-sampling attempts for background-only crops
+        bg_only_tolerance: Tolerance when checking if non-background channels are empty
 
     Returns:
         Dict with 'train', 'val', 'test' DataLoader instances
@@ -121,10 +121,10 @@ def create_data_loaders(
         train_transforms.append(
             RandomCrop3D(
                 random_crop_size,
-                reject_water_only=reject_water_only_crops,
-                water_channel_index=water_channel_index,
-                max_attempts=max_water_crop_attempts,
-                water_only_tolerance=water_only_tolerance
+                reject_water_only=reject_bg_only_crops,
+                water_channel_index=bg_channel_index,
+                max_attempts=max_bg_crop_attempts,
+                water_only_tolerance=bg_only_tolerance
             )
         )
     if random_rotation:

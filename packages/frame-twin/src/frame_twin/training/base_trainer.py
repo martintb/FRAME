@@ -486,6 +486,71 @@ class BaseTrainer:
         max_abs = max(abs(diff_img.min()), abs(diff_img.max()), 1.0)
         diff_norm = (diff_img / max_abs) * 0.5 + 0.5
         self.writer.add_image('compare/diff_argmax_center_bwr', diff_norm[None, ...], step, dataformats='CHW')
+
+        # Additional argmax visualizations excluding the water/background channel
+        C = x.shape[0]
+        water_idx = getattr(self, 'water_channel_index', None)
+        if water_idx is None:
+            water_idx = C - 1
+        if water_idx < 0:
+            water_idx = C + water_idx
+        tol = getattr(self, 'water_only_tolerance', 1e-6)
+
+        if 0 <= water_idx < C and C > 1:
+            # Helper to compute argmax with optional exclusion while retaining water label for empty voxels
+            def _argmax_excluding_water(tensor: torch.Tensor, non_water_mass: torch.Tensor) -> torch.Tensor:
+                masked = tensor.clone()
+                masked[water_idx] = float('-inf')
+                arg = torch.argmax(masked, dim=0)
+                if non_water_mass is not None:
+                    empty_mask = non_water_mass <= tol
+                    if empty_mask.any():
+                        arg = torch.where(
+                            empty_mask,
+                            torch.full_like(arg, water_idx),
+                            arg
+                        )
+                return arg
+
+            channel_mask = torch.ones(C, dtype=torch.bool, device=x.device)
+            channel_mask[water_idx] = False
+
+            non_water_mass_x = x[channel_mask].sum(dim=0) if channel_mask.any() else None
+            non_water_mass_xr = xr_vis[channel_mask].sum(dim=0) if channel_mask.any() else None
+
+            x_arg_no_water = _argmax_excluding_water(x, non_water_mass_x)  # (D,H,W)
+            xr_arg_no_water = _argmax_excluding_water(xr_vis, non_water_mass_xr)  # (D,H,W)
+
+            x_img_no_water = x_arg_no_water[zc].detach().to('cpu').numpy().astype(np.float32)
+            xr_img_no_water = xr_arg_no_water[zc].detach().to('cpu').numpy().astype(np.float32)
+            diff_img_no_water = (xr_img_no_water - x_img_no_water).astype(np.float32)
+
+            vmax_no_water = max(
+                x_img_no_water.max() if x_img_no_water.size else 1.0,
+                xr_img_no_water.max() if xr_img_no_water.size else 1.0,
+                1.0
+            )
+            self.writer.add_image(
+                'compare/input_argmax_center_no_water',
+                x_img_no_water[None, ...] / (vmax_no_water if vmax_no_water > 0 else 1.0),
+                step,
+                dataformats='CHW'
+            )
+            self.writer.add_image(
+                'compare/recon_argmax_center_no_water',
+                xr_img_no_water[None, ...] / (vmax_no_water if vmax_no_water > 0 else 1.0),
+                step,
+                dataformats='CHW'
+            )
+
+            max_abs_no_water = max(abs(diff_img_no_water.min()), abs(diff_img_no_water.max()), 1.0)
+            diff_norm_no_water = (diff_img_no_water / max_abs_no_water) * 0.5 + 0.5
+            self.writer.add_image(
+                'compare/diff_argmax_center_no_water_bwr',
+                diff_norm_no_water[None, ...],
+                step,
+                dataformats='CHW'
+            )
     
     def _log_epoch_metrics(self, train_metrics: Dict[str, float], val_metrics: Dict[str, float]):
         """Log epoch-level metrics."""

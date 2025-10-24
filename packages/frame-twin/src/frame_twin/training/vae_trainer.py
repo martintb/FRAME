@@ -65,12 +65,14 @@ class VAETrainer(BaseTrainer):
             from ..models import VpHVAE
             model = VpHVAE(
                 input_channels=config.model.input_channels,
+                prior_type=config.model.prior_type,
                 z1_size=config.model.z1_size,
                 z2_size=config.model.z2_size,
                 vampprior_num_components=config.model.vampprior_num_components,
                 vampprior_init_strategy=config.model.vampprior_init_strategy,
                 input_type=config.model.input_type,
-                input_resolution=getattr(config.model, 'input_resolution', 64)  # Default to 64 if not specified
+                input_resolution=getattr(config.model, 'input_resolution', 64),  # Default to 64 if not specified
+                use_gating=getattr(config.model, 'use_gating', True)  # Default to True for backward compatibility
             )
             self.is_hvae = False
             self.is_vp_hvae = True
@@ -96,9 +98,18 @@ class VAETrainer(BaseTrainer):
             )
         elif getattr(self, 'is_vp_hvae', False):
             from ..losses import VpHVAELoss
+            bg_only_tolerance = config.data.bg_only_tolerance
+            if config.data.water_only_tolerance is not None:
+                bg_only_tolerance = config.data.water_only_tolerance
             loss_fn = VpHVAELoss(
                 input_type=config.model.input_type,
-                beta=config.loss.kl_weight or 1.0
+                beta=config.loss.kl_weight if config.loss.kl_weight is not None else 1.0,
+                label_smoothing=getattr(config.loss, 'label_smoothing', None),
+                bg_weight=getattr(config.loss, 'bg_weight', None),
+                water_channel_index=config.data.water_channel_index,
+                water_only_tolerance=bg_only_tolerance,
+                channel_weights=getattr(config.loss, 'channel_weights', None),
+                prior_type=config.model.prior_type
             )
         else:
             loss_fn = VAELoss(
@@ -190,11 +201,40 @@ class VAETrainer(BaseTrainer):
         # Set experiment reference for interruption handling
         self.experiment = experiment
         self.config = config
+        self.bg_channel_name = config.data.bg_channel_name
+        self.water_channel_index = config.data.water_channel_index
+        if hasattr(config.data, 'water_only_tolerance') and config.data.water_only_tolerance is not None:
+            self.water_only_tolerance = config.data.water_only_tolerance
+        else:
+            self.water_only_tolerance = config.data.bg_only_tolerance
     
     def set_data_loaders(self, train_loader: DataLoader, val_loader: DataLoader):
         """Set data loaders after initialization."""
         self.train_loader = train_loader
         self.val_loader = val_loader
+        if getattr(self, 'is_vp_hvae', False):
+            channel_mapping = {}
+            if train_loader is not None:
+                dataset = getattr(train_loader, 'dataset', None)
+                voxel_library = getattr(dataset, 'voxel_library', None) if dataset is not None else None
+                channel_mapping = getattr(voxel_library, 'channels', None) if voxel_library is not None else None
+            self.loss_fn.set_channel_mapping(channel_mapping)
+            bg_index = None
+            if channel_mapping:
+                if self.bg_channel_name and self.bg_channel_name in channel_mapping:
+                    bg_index = channel_mapping[self.bg_channel_name]
+                elif self.water_channel_index is not None:
+                    bg_index = self.water_channel_index
+                elif 'water' in channel_mapping:
+                    bg_index = channel_mapping['water']
+            if bg_index is None and self.water_channel_index is not None:
+                bg_index = self.water_channel_index
+            if self.bg_channel_name and channel_mapping and self.bg_channel_name not in channel_mapping:
+                raise ValueError(
+                    f"Background channel '{self.bg_channel_name}' not found in voxel library channels: {list(channel_mapping.keys())}"
+                )
+            self.water_channel_index = bg_index
+            self.loss_fn.water_channel_index = bg_index
     
     def _compute_loss(self, batch: Dict[str, Any]) -> tuple[torch.Tensor, Dict[str, float], tuple]:
         """Compute VAE/HVAE loss for a batch.
@@ -221,14 +261,15 @@ class VAETrainer(BaseTrainer):
             )
         elif getattr(self, 'is_vp_hvae', False):
             # Get VampPrior components (direct latent space)
-            vamp_means = self.model.vamp_means
-            vamp_logvars = self.model.vamp_logvars
+            vamp_means = getattr(self.model, 'vamp_means', None)
+            vamp_logvars = getattr(self.model, 'vamp_logvars', None)
+            num_components = getattr(self.model, 'vampprior_num_components', None)
             current_kl_weight = self._current_kl_weight()
 
             total_loss, recon_loss, kl_loss = self.loss_fn(
                 voxels, x_recon, x_logvar, z1_q, z1_q_mean, z1_q_logvar,
                 z2_q, z2_q_mean, z2_q_logvar, z1_p_mean, z1_p_logvar,
-                vamp_means, vamp_logvars, self.model.vampprior_num_components,
+                vamp_means, vamp_logvars, num_components,
                 beta=current_kl_weight
             )
         else:
@@ -298,7 +339,17 @@ class VAETrainer(BaseTrainer):
                 'z2_mean_norm': z2_q_mean.norm(dim=1).mean().item(),
                 'z1_std_mean': (0.5 * z1_q_logvar).exp().mean().item(),  # Average std
                 'z2_std_mean': (0.5 * z2_q_logvar).exp().mean().item(),
+                'prior_type_is_standard': 1.0 if getattr(self.model, 'prior_type', 'vamp') == 'standard' else 0.0,
             }
+            bg_penalty = getattr(self.loss_fn, 'last_bg_penalty', None)
+            if bg_penalty is not None:
+                metrics['bg_penalty'] = float(bg_penalty)
+            valid_fraction = getattr(self.loss_fn, 'last_valid_fraction', None)
+            if valid_fraction is not None:
+                metrics['valid_fraction'] = float(valid_fraction)
+            cw_norm = getattr(self.loss_fn, 'last_channel_weights_norm', None)
+            if cw_norm is not None:
+                metrics['channel_weight_mean'] = float(cw_norm)
             latent_tuple = (z1_q, z1_q_mean, z1_q_logvar, z2_q, z2_q_mean, z2_q_logvar)
         else:
             metrics = {

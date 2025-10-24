@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Tuple, Optional
 
-from .gated_layers import GatedConv3d, GatedDense, NonLinear, Conv3d
+from .gated_layers import GatedConv3d, GatedDense, StandardDense, NonLinear, Conv3d
 
 
 class VpHVAE(nn.Module):
@@ -22,35 +22,49 @@ class VpHVAE(nn.Module):
     def __init__(
         self,
         input_channels: int = 10,
+        prior_type: str = "vamp",
         z1_size: int = 40,
         z2_size: int = 40,
         vampprior_num_components: int = 128,
         vampprior_init_strategy: str = "random",
         input_type: str = "continuous",
-        input_resolution: int = 64  # Dynamic resolution support
+        input_resolution: int = 64,  # Dynamic resolution support
+        use_gating: bool = True  # Use gated layers (False for standard ReLU layers)
     ):
         super().__init__()
 
         self.input_channels = input_channels
+        if prior_type not in {"vamp", "standard"}:
+            raise ValueError(f"Unsupported prior_type '{prior_type}'. Expected 'vamp' or 'standard'.")
+        self.prior_type = prior_type
         self.z1_size = z1_size
         self.z2_size = z2_size
         self.vampprior_num_components = vampprior_num_components
         self.vampprior_init_strategy = vampprior_init_strategy
         self.input_type = input_type
         self.input_resolution = input_resolution
+        self.use_gating = use_gating
 
         # Calculate h_size dynamically: after 2 strides of 2, resolution -> resolution/4
         # e.g., 64³ -> 16³, 128³ -> 32³
         self.spatial_after_downsample = input_resolution // 4
         self.h_size = 6 * (self.spatial_after_downsample ** 3)
-        
+
+        # Select layer types based on use_gating
+        if use_gating:
+            ConvLayer = GatedConv3d
+            DenseLayer = GatedDense
+        else:
+            ConvLayer = lambda *args, **kwargs: Conv3d(*args, **kwargs, activation=nn.ReLU())
+            DenseLayer = lambda *args, **kwargs: StandardDense(*args, **kwargs, activation=nn.ReLU())
+
         # Encoder q(z2|x)
         self.q_z2_layers = nn.Sequential(
-            GatedConv3d(input_channels, 32, 7, 1, 3),
-            GatedConv3d(32, 32, 3, 2, 1),
-            GatedConv3d(32, 64, 5, 1, 2),
-            GatedConv3d(64, 64, 3, 2, 1),
-            GatedConv3d(64, 6, 3, 1, 1)
+            ConvLayer(input_channels, 32, 7, 1, 3),
+            ConvLayer(32, 32, 3, 2, 1),
+            ConvLayer(32, 64, 5, 1, 2),
+            ConvLayer(64, 64, 3, 2, 1),
+            ConvLayer(64, 6, 3, 1, 1)
         )
         self.q_z2_mean = NonLinear(self.h_size, z2_size, activation=None)
         self.q_z2_logvar = NonLinear(self.h_size, z2_size, activation=nn.Hardtanh(min_val=-6., max_val=2.))
@@ -58,37 +72,37 @@ class VpHVAE(nn.Module):
         # Encoder q(z1|x,z2)
         # Process x
         self.q_z1_layers_x = nn.Sequential(
-            GatedConv3d(input_channels, 32, 3, 1, 1),
-            GatedConv3d(32, 32, 3, 2, 1),
-            GatedConv3d(32, 64, 3, 1, 1),
-            GatedConv3d(64, 64, 3, 2, 1),
-            GatedConv3d(64, 6, 3, 1, 1)
+            ConvLayer(input_channels, 32, 3, 1, 1),
+            ConvLayer(32, 32, 3, 2, 1),
+            ConvLayer(32, 64, 3, 1, 1),
+            ConvLayer(64, 64, 3, 2, 1),
+            ConvLayer(64, 6, 3, 1, 1)
         )
         # Process z2
-        self.q_z1_layers_z2 = GatedDense(z2_size, self.h_size)
+        self.q_z1_layers_z2 = DenseLayer(z2_size, self.h_size)
         # Process joint
-        self.q_z1_layers_joint = GatedDense(2 * self.h_size, 300)
+        self.q_z1_layers_joint = DenseLayer(2 * self.h_size, 300)
         # Linear layers
         self.q_z1_mean = NonLinear(300, z1_size, activation=None)
         self.q_z1_logvar = NonLinear(300, z1_size, activation=nn.Hardtanh(min_val=-6., max_val=2.))
         
         # Prior p(z1|z2)
         self.p_z1_layers = nn.Sequential(
-            GatedDense(z2_size, 300),
-            GatedDense(300, 300)
+            DenseLayer(z2_size, 300),
+            DenseLayer(300, 300)
         )
         self.p_z1_mean = NonLinear(300, z1_size, activation=None)
         self.p_z1_logvar = NonLinear(300, z1_size, activation=nn.Hardtanh(min_val=-6., max_val=2.))
         
         # Decoder p(x|z1,z2) - REDESIGNED for memory efficiency
         # Instead of massive FC layer, use small FC → reshape → spatial upsampling
-        self.p_x_layers_z1 = GatedDense(z1_size, 300)
-        self.p_x_layers_z2 = GatedDense(z2_size, 300)
+        self.p_x_layers_z1 = DenseLayer(z1_size, 300)
+        self.p_x_layers_z2 = DenseLayer(z2_size, 300)
 
         # Small FC to initial spatial features (4³ feature map with 64 channels)
         self.decoder_initial_spatial = 4  # Start with small 4³ feature map
         self.decoder_initial_channels = 64
-        self.p_x_layers_joint_fc = GatedDense(
+        self.p_x_layers_joint_fc = DenseLayer(
             2 * 300,
             self.decoder_initial_channels * (self.decoder_initial_spatial ** 3)
         )
@@ -107,7 +121,7 @@ class VpHVAE(nn.Module):
                 nn.ConvTranspose3d(in_ch, out_ch, kernel_size=4, stride=2, padding=1),
                 nn.ReLU(inplace=True),
                 # Refinement conv
-                GatedConv3d(out_ch, out_ch, 3, 1, 1),
+                ConvLayer(out_ch, out_ch, 3, 1, 1),
             ])
             in_ch = out_ch
 
@@ -130,7 +144,10 @@ class VpHVAE(nn.Module):
                 self._he_init(m)
         
         # VampPrior pseudo-inputs
-        self._init_vampprior()
+        self.register_parameter('vamp_means', None)
+        self.register_parameter('vamp_logvars', None)
+        if self.prior_type == "vamp":
+            self._init_vampprior()
     
     def _he_init(self, m):
         """He initialization for linear layers."""
@@ -139,6 +156,8 @@ class VpHVAE(nn.Module):
     
     def _init_vampprior(self):
         """Initialize VampPrior pseudo-inputs directly in z2 latent space (memory efficient)."""
+        if self.prior_type != "vamp":
+            return
         # Instead of full voxel pseudo-inputs, use direct latent space components
         # This avoids the ~2.68B parameter issue with full 128³ pseudo-inputs
         
@@ -278,6 +297,13 @@ class VpHVAE(nn.Module):
     
     def log_p_z2(self, z2):
         """Compute VampPrior log p(z2) using direct latent space components."""
+        if self.prior_type == "standard":
+            from ..losses.distributions import log_Normal_standard
+            return log_Normal_standard(z2, dim=1)
+
+        if self.vamp_means is None or self.vamp_logvars is None:
+            raise RuntimeError("VampPrior parameters are not initialized.")
+
         # Use direct latent space components (memory efficient)
         z_expand = z2.unsqueeze(1)  # (B, 1, z2_size)
         means = self.vamp_means.unsqueeze(0)  # (1, K, z2_size)
@@ -355,11 +381,16 @@ class VpHVAE(nn.Module):
         if target_resolution is None:
             target_resolution = self.input_resolution
 
-        # Sample z2 from VampPrior using direct latent space components
-        comp_idx = torch.randint(0, self.vampprior_num_components, (num_samples,), device=device)
-        z2_sample_mean = self.vamp_means[comp_idx]  # (num_samples, z2_size)
-        z2_sample_logvar = self.vamp_logvars[comp_idx]  # (num_samples, z2_size)
-        z2_sample = self.reparameterize(z2_sample_mean, z2_sample_logvar)
+        # Sample z2 based on selected prior
+        if self.prior_type == "vamp":
+            if self.vamp_means is None or self.vamp_logvars is None:
+                raise RuntimeError("VampPrior parameters are not initialized.")
+            comp_idx = torch.randint(0, self.vampprior_num_components, (num_samples,), device=device)
+            z2_sample_mean = self.vamp_means[comp_idx]  # (num_samples, z2_size)
+            z2_sample_logvar = self.vamp_logvars[comp_idx]  # (num_samples, z2_size)
+            z2_sample = self.reparameterize(z2_sample_mean, z2_sample_logvar)
+        else:
+            z2_sample = torch.randn(num_samples, self.z2_size, device=device)
 
         # Sample z1 from conditional prior
         z1_sample_mean, z1_sample_logvar = self.p_z1(z2_sample)

@@ -56,7 +56,7 @@ def _resolve_library_path(library_ref: str) -> tuple[Path, str]:
                 f"Library '{library_ref}' not found in {config.libraries_path}"
             )
         
-        return library.path / "voxels.zarr", library_ref
+    return library.path / "voxels.zarr", library_ref
     
     # If we get here, it's neither a valid path nor a recognized UUID
     raise FileNotFoundError(
@@ -381,6 +381,7 @@ def train_vae(config_path: str):
     
     print("Creating data loaders...")
     pin_memory = config.training.device == "cuda"
+    reject_bg, bg_channel_index, max_bg_attempts, bg_tol = _resolve_background_params(config.data, voxel_library)
 
     loaders = create_data_loaders(
         voxel_library=voxel_library,
@@ -391,10 +392,10 @@ def train_vae(config_path: str):
         pin_memory=pin_memory,
         random_crop_size=config.data.random_crop_size,
         random_rotation=config.data.random_rotation,
-        reject_water_only_crops=config.data.reject_water_only_crops,
-        water_channel_index=config.data.water_channel_index,
-        max_water_crop_attempts=config.data.max_water_crop_attempts,
-        water_only_tolerance=config.data.water_only_tolerance
+        reject_bg_only_crops=reject_bg,
+        bg_channel_index=bg_channel_index,
+        max_bg_crop_attempts=max_bg_attempts,
+        bg_only_tolerance=bg_tol
     )
     train_loader = loaders['train']
     val_loader = loaders['val']
@@ -443,6 +444,7 @@ def train_vae_with_checkpoint(config_path: str, experiment, checkpoint_path: str
     
     print("Creating data loaders...")
     pin_memory = config.training.device == "cuda"
+    reject_bg, bg_channel_index, max_bg_attempts, bg_tol = _resolve_background_params(config.data, voxel_library)
 
     loaders = create_data_loaders(
         voxel_library=voxel_library,
@@ -453,10 +455,10 @@ def train_vae_with_checkpoint(config_path: str, experiment, checkpoint_path: str
         pin_memory=pin_memory,
         random_crop_size=config.data.random_crop_size,
         random_rotation=config.data.random_rotation,
-        reject_water_only_crops=config.data.reject_water_only_crops,
-        water_channel_index=config.data.water_channel_index,
-        max_water_crop_attempts=config.data.max_water_crop_attempts,
-        water_only_tolerance=config.data.water_only_tolerance
+        reject_bg_only_crops=reject_bg,
+        bg_channel_index=bg_channel_index,
+        max_bg_crop_attempts=max_bg_attempts,
+        bg_only_tolerance=bg_tol
     )
     train_loader = loaders['train']
     val_loader = loaders['val']
@@ -529,6 +531,7 @@ def train_ddpm(config_path: str):
     
     print("Creating data loaders...")
     pin_memory = config.training.device == "cuda"
+    reject_bg, bg_channel_index, max_bg_attempts, bg_tol = _resolve_background_params(config.data, voxel_library)
 
     loaders = create_data_loaders(
         voxel_library=voxel_library,
@@ -539,10 +542,10 @@ def train_ddpm(config_path: str):
         pin_memory=pin_memory,
         random_crop_size=config.data.random_crop_size,
         random_rotation=config.data.random_rotation,
-        reject_water_only_crops=config.data.reject_water_only_crops,
-        water_channel_index=config.data.water_channel_index,
-        max_water_crop_attempts=config.data.max_water_crop_attempts,
-        water_only_tolerance=config.data.water_only_tolerance
+        reject_bg_only_crops=reject_bg,
+        bg_channel_index=bg_channel_index,
+        max_bg_crop_attempts=max_bg_attempts,
+        bg_only_tolerance=bg_tol
     )
     train_loader = loaders['train']
     val_loader = loaders['val']
@@ -591,6 +594,7 @@ def train_ddpm_with_checkpoint(config_path: str, experiment, checkpoint_path: st
     
     print("Creating data loaders...")
     pin_memory = config.training.device == "cuda"
+    reject_bg, bg_channel_index, max_bg_attempts, bg_tol = _resolve_background_params(config.data, voxel_library)
 
     loaders = create_data_loaders(
         voxel_library=voxel_library,
@@ -601,10 +605,10 @@ def train_ddpm_with_checkpoint(config_path: str, experiment, checkpoint_path: st
         pin_memory=pin_memory,
         random_crop_size=config.data.random_crop_size,
         random_rotation=config.data.random_rotation,
-        reject_water_only_crops=config.data.reject_water_only_crops,
-        water_channel_index=config.data.water_channel_index,
-        max_water_crop_attempts=config.data.max_water_crop_attempts,
-        water_only_tolerance=config.data.water_only_tolerance
+        reject_bg_only_crops=reject_bg,
+        bg_channel_index=bg_channel_index,
+        max_bg_crop_attempts=max_bg_attempts,
+        bg_only_tolerance=bg_tol
     )
     train_loader = loaders['train']
     val_loader = loaders['val']
@@ -717,18 +721,31 @@ def continue_training(experiment_uuid: str, config_path: Optional[str] = None):
     if not checkpoints:
         raise ValueError(f"No checkpoints found for experiment {experiment_uuid}")
     
-    # Use best checkpoint if available, otherwise latest
+    # Use the experiment-marked best checkpoint if available
+    resume_checkpoint = None
     if experiment.best_checkpoint:
-        latest_checkpoint = ckpt_mgr.get_checkpoint(experiment.path, experiment.best_checkpoint)
-        if latest_checkpoint is None:
-            print(f"Warning: Best checkpoint {experiment.best_checkpoint} not found, using latest")
-            latest_checkpoint = checkpoints[-1]
+        resume_checkpoint = next(
+            (ckpt for ckpt in checkpoints if ckpt.uuid == experiment.best_checkpoint),
+            None
+        )
+        if resume_checkpoint is None:
+            resume_checkpoint = ckpt_mgr.get_checkpoint(experiment.path, experiment.best_checkpoint)
+        
+        if resume_checkpoint is None:
+            raise ValueError(
+                f"Best checkpoint {experiment.best_checkpoint} is marked in the experiment, "
+                "but could not be resolved. Re-run 'frame checkpoint set-best' to repair."
+            )
     else:
-        latest_checkpoint = checkpoints[-1]
+        resume_checkpoint = checkpoints[-1]
+        print(
+            "No best checkpoint marked for this experiment; resuming from the latest checkpoint "
+            f"(epoch {resume_checkpoint.epoch}, step {resume_checkpoint.step})."
+        )
     
-    print(f"Resuming from checkpoint: {latest_checkpoint.uuid}")
-    print(f"  Epoch: {latest_checkpoint.epoch}, Step: {latest_checkpoint.step}")
-    print(f"  Timestamp: {latest_checkpoint.timestamp}")
+    print(f"Resuming from checkpoint: {resume_checkpoint.uuid}")
+    print(f"  Epoch: {resume_checkpoint.epoch}, Step: {resume_checkpoint.step}")
+    print(f"  Timestamp: {resume_checkpoint.timestamp}")
     
     # Determine config to use
     if config_path:
@@ -762,7 +779,7 @@ def continue_training(experiment_uuid: str, config_path: Optional[str] = None):
         )
         
         # Load the checkpoint into the trainer and resume
-        train_vae_with_checkpoint(str(config_file), continued_experiment, latest_checkpoint.checkpoint_path)
+        train_vae_with_checkpoint(str(config_file), continued_experiment, resume_checkpoint.checkpoint_path)
         
     elif experiment.model_type == 'ddpm':
         config = DDPMConfig.from_toml(str(config_file))
@@ -780,7 +797,7 @@ def continue_training(experiment_uuid: str, config_path: Optional[str] = None):
         )
         
         # Load the checkpoint into the trainer and resume
-        train_ddpm_with_checkpoint(str(config_file), continued_experiment, latest_checkpoint.checkpoint_path)
+        train_ddpm_with_checkpoint(str(config_file), continued_experiment, resume_checkpoint.checkpoint_path)
         
     else:
         raise ValueError(f"Unknown model type: {experiment.model_type}")
@@ -1141,7 +1158,7 @@ def _load_experiment_and_checkpoint(experiment_uuid: str):
 
 def _create_model_from_checkpoint(experiment, checkpoint_data, device: torch.device):
     """Instantiate model from checkpoint configuration."""
-    from .models import VAE, UNetVAE, HVAE
+    from .models import VAE, UNetVAE, HVAE, VpHVAE
 
     print(f"Creating {experiment.model_type} model...")
     model_config = checkpoint_data.get('config', {}).get('model', {}) or {}
@@ -1210,6 +1227,19 @@ def _create_model_from_checkpoint(experiment, checkpoint_data, device: torch.dev
             latent_spatial_size = state_dict['vamp_means'].shape[-1]
             print(f"Initializing VampPrior components with latent_spatial_size={latent_spatial_size}")
             model._init_vampprior_components(latent_spatial_size, device)
+    elif experiment.model_type == 'vp_hvae':
+        vp_kwargs = {
+            'input_channels': input_channels,
+            'prior_type': model_config.get('prior_type', 'vamp'),
+            'z1_size': model_config.get('z1_size', 16),
+            'z2_size': model_config.get('z2_size', 16),
+            'vampprior_num_components': model_config.get('vampprior_num_components', 128),
+            'vampprior_init_strategy': model_config.get('vampprior_init_strategy', 'random'),
+            'input_type': model_config.get('input_type', 'fractional'),
+            'input_resolution': model_config.get('input_resolution', 64),
+            'use_gating': model_config.get('use_gating', True)  # Default to True for backward compatibility
+        }
+        model = VpHVAE(**vp_kwargs)
     else:
         raise ValueError(f"Unsupported model type: {experiment.model_type}")
 
@@ -1245,6 +1275,9 @@ def _get_reconstruction_type(checkpoint_data) -> str:
 
 def _infer_latent_size(experiment, checkpoint_data, model) -> int:
     """Infer latent spatial size based on training configuration."""
+    from .models import VpHVAE
+
+    is_vphvae = isinstance(model, VpHVAE)
     crop_size = checkpoint_data.get('config', {}).get('data', {}).get('random_crop_size')
 
     if crop_size is None:
@@ -1260,14 +1293,24 @@ def _infer_latent_size(experiment, checkpoint_data, model) -> int:
                 print(f"Warning: Could not load initial config: {exc}")
 
     if crop_size is not None:
-        latent_size = crop_size // (2 ** getattr(model, 'levels', 1))
-        print(f"Model trained on {crop_size}³ crops")
-        print(f"Computed latent size: {latent_size}³ (crop_size={crop_size}, levels={getattr(model, 'levels', 'n/a')})")
+        if is_vphvae:
+            latent_size = crop_size
+            print(f"Model trained on {crop_size}³ crops (VP-HVAE)")
+            print(f"Using sample resolution: {latent_size}³")
+        else:
+            latent_size = crop_size // (2 ** getattr(model, 'levels', 1))
+            print(f"Model trained on {crop_size}³ crops")
+            print(f"Computed latent size: {latent_size}³ (crop_size={crop_size}, levels={getattr(model, 'levels', 'n/a')})")
     else:
-        latent_size = 128 // (2 ** getattr(model, 'levels', 1))
-        print("WARNING: Could not determine training crop size from config")
-        print("Assuming full resolution training (128³)")
-        print(f"Computed latent size: {latent_size}³ (levels={getattr(model, 'levels', 'n/a')})")
+        if is_vphvae:
+            latent_size = getattr(model, 'input_resolution', 64)
+            print("WARNING: Could not determine training crop size from config")
+            print(f"Assuming VP-HVAE input resolution {latent_size}³")
+        else:
+            latent_size = 128 // (2 ** getattr(model, 'levels', 1))
+            print("WARNING: Could not determine training crop size from config")
+            print("Assuming full resolution training (128³)")
+            print(f"Computed latent size: {latent_size}³ (levels={getattr(model, 'levels', 'n/a')})")
 
     return latent_size
 
@@ -1306,9 +1349,13 @@ def _generate_prior_sample_voxel(
     channels_to_show: Optional[List[int]]
 ) -> VoxelGrid:
     """Sample latent prior and return VoxelGrid."""
+    from .models import VpHVAE
+
     with torch.no_grad():
         if isinstance(model, HVAE):
             logits = model.sample_from_vampprior(batch_size=1, device=device)
+        elif isinstance(model, VpHVAE):
+            logits = model.sample(num_samples=1, device=device, target_resolution=latent_size)
         else:
             logits = model.sample(num_samples=1, device=device, latent_size=latent_size)
         generated = _apply_activation(logits, reconstruction_type)
@@ -1350,8 +1397,8 @@ def sample_prior_from_experiment(
 ) -> None:
     """CLI entry: sample from latent prior and visualize in napari."""
     experiment, checkpoint, checkpoint_data = _load_experiment_and_checkpoint(experiment_uuid)
-    if experiment.model_type not in {'vae', 'unet_vae', 'hvae'}:
-        raise ValueError(f"Experiment {experiment_uuid} is not a VAE/UNet-VAE/HVAE (got {experiment.model_type})")
+    if experiment.model_type not in {'vae', 'unet_vae', 'hvae', 'vp_hvae'}:
+        raise ValueError(f"Experiment {experiment_uuid} is not a VAE/UNet-VAE/HVAE/VP-HVAE (got {experiment.model_type})")
 
     device = _determine_device(device_choice)
     model = _create_model_from_checkpoint(experiment, checkpoint_data, device)
@@ -1937,3 +1984,34 @@ napari.run()
 
 if __name__ == "__main__":
     main()
+def _resolve_background_params(data_config, voxel_library) -> tuple[bool, Optional[int], int, float]:
+    """Determine background crop configuration from data config and library metadata."""
+    channels = getattr(voxel_library, 'channels', {}) or {}
+
+    # Determine background channel index
+    bg_channel_index = None
+    if data_config.bg_channel_name:
+        if data_config.bg_channel_name not in channels:
+            raise ValueError(
+                f"Background channel '{data_config.bg_channel_name}' not found in library channels: {list(channels.keys())}"
+            )
+        bg_channel_index = channels[data_config.bg_channel_name]
+    elif data_config.water_channel_index is not None:
+        bg_channel_index = data_config.water_channel_index
+    elif 'water' in channels:
+        bg_channel_index = channels['water']
+
+    # Resolve booleans and numeric parameters (prefer legacy values when provided)
+    reject_bg = data_config.reject_bg_only_crops
+    if data_config.reject_water_only_crops is not None:
+        reject_bg = data_config.reject_water_only_crops
+
+    max_bg_attempts = data_config.max_bg_crop_attempts
+    if data_config.max_water_crop_attempts is not None:
+        max_bg_attempts = data_config.max_water_crop_attempts
+
+    bg_tolerance = data_config.bg_only_tolerance
+    if data_config.water_only_tolerance is not None:
+        bg_tolerance = data_config.water_only_tolerance
+
+    return reject_bg, bg_channel_index, max_bg_attempts, bg_tolerance

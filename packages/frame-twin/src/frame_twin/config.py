@@ -25,24 +25,44 @@ class DataConfig(BaseModel):
     # Data augmentation options
     random_crop_size: Optional[int] = Field(None, gt=0, description="Size of random crops for training (e.g., 64 for 64^3)")
     random_rotation: bool = Field(False, description="Apply random 90-degree rotations and flips")
-    reject_water_only_crops: bool = Field(
+    reject_bg_only_crops: bool = Field(
         False,
-        description="Resample random crops that contain only the water/background channel"
+        description="Resample random crops that contain only the background channel"
+    )
+    bg_channel_name: Optional[str] = Field(
+        None,
+        description="Name of the background channel (looked up from library channel metadata)"
+    )
+    max_bg_crop_attempts: int = Field(
+        8,
+        gt=0,
+        description="Maximum number of resampling attempts when rejecting background-only crops"
+    )
+    bg_only_tolerance: float = Field(
+        1e-6,
+        ge=0.0,
+        description="Tolerance used to decide if non-background channels are empty when rejecting crops"
+    )
+
+    # Legacy options (deprecated; retained for backward compatibility)
+    reject_water_only_crops: Optional[bool] = Field(
+        None,
+        description="DEPRECATED: Use reject_bg_only_crops instead"
     )
     water_channel_index: Optional[int] = Field(
         None,
         ge=0,
-        description="Index of the water/background channel (defaults to last channel when omitted)"
+        description="DEPRECATED: Use bg_channel_name instead"
     )
-    max_water_crop_attempts: int = Field(
-        8,
+    max_water_crop_attempts: Optional[int] = Field(
+        None,
         gt=0,
-        description="Maximum number of times to resample a crop when rejecting water-only crops"
+        description="DEPRECATED: Use max_bg_crop_attempts instead"
     )
-    water_only_tolerance: float = Field(
-        1e-6,
+    water_only_tolerance: Optional[float] = Field(
+        None,
         ge=0.0,
-        description="Tolerance used to decide if non-water channels are empty when rejecting crops"
+        description="DEPRECATED: Use bg_only_tolerance instead"
     )
 
     @validator('test_ratio')
@@ -156,6 +176,10 @@ class VpHVAEModelConfig(BaseModel):
     """VampPrior HVAE model configuration."""
     type: Literal["vp_hvae"] = "vp_hvae"
     input_channels: int = Field(10, gt=0, description="Number of input channels")
+    prior_type: Literal["vamp", "standard"] = Field(
+        "vamp",
+        description="Latent prior for z2 ('vamp' = VampPrior mixture, 'standard' = N(0,I))"
+    )
     z1_size: int = Field(40, gt=0, description="Bottom latent dimension")
     z2_size: int = Field(40, gt=0, description="Top latent dimension")
     vampprior_num_components: int = Field(128, gt=0, description="Number of VampPrior components")
@@ -246,6 +270,10 @@ class LossConfig(BaseModel):
     bg_weight: Optional[float] = Field(None, ge=0.0)
     edge_weight: Optional[float] = Field(None, ge=0.0)  # Edge-preserving loss weight
     label_smoothing: Optional[float] = Field(0.0, ge=0.0, le=1.0, description="Label smoothing for fractional_ce loss")
+    channel_weights: Optional[Dict[str, float]] = Field(
+        None,
+        description="Optional per-channel weights for fractional_ce losses keyed by channel name"
+    )
 
     # HVAE-specific parameters
     kl_weight_bottom: Optional[float] = Field(None, gt=0.0, description="Weight for bottom KL divergence (β1)")
