@@ -1565,13 +1565,9 @@ def perturb_structure_from_experiment(
     with torch.no_grad():
         for idx in range(num_samples):
             
-            # Handle different decode signatures
-            if model.num_layers == 2:
-                decoded_logits = model.perturb_latents(input_tensor, sigma_top=sigma, sigma_bottom=sigma, scale_by_std=True)
-            else:  # VAE or UNetVAE
-                noise = torch.randn_like(mu) * sigma
-                latent_sample = mu + noise
-                decoded_logits = model.decode(latent_sample)
+            noise = torch.randn_like(mu) * sigma
+            latent_sample = mu + noise
+            decoded_logits = model.decode(latent_sample)
             
             decoded_tensor = _apply_activation(decoded_logits, reconstruction_type).squeeze(0).cpu().float()
             print(f"Perturbation {idx}: range [{decoded_tensor.min():.4f}, {decoded_tensor.max():.4f}] mean={decoded_tensor.mean():.4f}")
@@ -1815,7 +1811,6 @@ def validate_vae_reconstruction(
     elif model_type == 'hvae':
         from .models import HVAE
         vae = HVAE(
-            num_layers=vae_config.get('num_layers', 2),
             input_channels=vae_config['input_channels'],
             latent_channels_top=vae_config.get('latent_channels_top', 16),
             latent_channels_bottom=vae_config.get('latent_channels_bottom'),

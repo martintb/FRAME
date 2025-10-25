@@ -106,6 +106,10 @@ class BaseTrainer:
         self._save_checkpoint(train_metrics, val_metrics, is_best)
         print(f"Saved checkpoint at epoch {self.current_epoch}, step {self.global_step}")
 
+        # Log hyperparameters to TensorBoard (even for interrupted runs)
+        self._log_hparams_to_tensorboard(train_metrics, val_metrics)
+        print("Logged hyperparameters to TensorBoard")
+
         # Close TensorBoard writer
         if self.writer is not None:
             self.writer.close()
@@ -118,6 +122,7 @@ class BaseTrainer:
         print(f"  - Final epoch: {self.current_epoch}")
         print(f"  - Final step: {self.global_step}")
         print(f"  - Checkpoint saved")
+        print(f"  - Hyperparameters logged")
         print(f"  - Experiment metadata updated")
         sys.exit(0)
     
@@ -340,18 +345,21 @@ class BaseTrainer:
             
             # Training completed normally
             print("Training completed successfully!")
-            
+
             # Save final checkpoint
             self._save_checkpoint(train_metrics, val_metrics, is_best)
-            
+
+            # Log hyperparameters to TensorBoard
+            self._log_hparams_to_tensorboard(train_metrics, val_metrics)
+
             # Update experiment status
             if self.experiment:
                 self.experiment.update_status("completed")
-            
+
             # Close writer
             if self.writer is not None:
                 self.writer.close()
-            
+
             # Restore signal handlers
             self._restore_signal_handlers()
             
@@ -559,6 +567,124 @@ class BaseTrainer:
                 self.writer.add_scalar(f"epoch/train_{key}", value, self.current_epoch)
             for key, value in val_metrics.items():
                 self.writer.add_scalar(f"epoch/val_{key}", value, self.current_epoch)
+
+    def _flatten_config_dict(self, config_dict: Dict[str, Any], parent_key: str = '', sep: str = '/') -> Dict[str, Any]:
+        """Flatten a nested config dictionary for TensorBoard hparams.
+
+        Args:
+            config_dict: Nested configuration dictionary
+            parent_key: Parent key for recursive flattening
+            sep: Separator for nested keys
+
+        Returns:
+            Flattened dictionary with only scalar values suitable for TensorBoard
+        """
+        flattened = {}
+
+        for key, value in config_dict.items():
+            new_key = f"{parent_key}{sep}{key}" if parent_key else key
+
+            if isinstance(value, dict):
+                # Recursively flatten nested dicts
+                flattened.update(self._flatten_config_dict(value, new_key, sep=sep))
+            elif isinstance(value, (list, tuple)):
+                # Convert lists/tuples to string representation
+                flattened[new_key] = str(value)
+            elif isinstance(value, (int, float, str, bool)):
+                # Keep scalar values as-is
+                flattened[new_key] = value
+            elif value is None:
+                # Convert None to string
+                flattened[new_key] = "None"
+            else:
+                # Convert other types to string
+                flattened[new_key] = str(value)
+
+        return flattened
+
+    def _log_hyperparameters(self) -> Dict[str, Any]:
+        """Extract hyperparameters from config for TensorBoard logging.
+
+        Returns:
+            Flattened dictionary of hyperparameters
+        """
+        hparams = {}
+
+        # Use full config if available
+        if self.full_config is not None:
+            # Convert full config to dict (supports both pydantic models and dicts)
+            if hasattr(self.full_config, 'dict'):
+                config_dict = self.full_config.dict()
+            elif hasattr(self.full_config, 'model_dump'):
+                config_dict = self.full_config.model_dump()
+            elif isinstance(self.full_config, dict):
+                config_dict = self.full_config
+            else:
+                config_dict = {}
+
+            # Flatten the config
+            hparams = self._flatten_config_dict(config_dict)
+        else:
+            # Fallback: extract partial config
+            # Training config
+            if hasattr(self.training_config, 'dict'):
+                train_dict = self.training_config.dict()
+            elif hasattr(self.training_config, 'model_dump'):
+                train_dict = self.training_config.model_dump()
+            else:
+                train_dict = {}
+            hparams.update(self._flatten_config_dict(train_dict, parent_key='training'))
+
+            # Logging config
+            if hasattr(self.logging_config, 'dict'):
+                log_dict = self.logging_config.dict()
+            elif hasattr(self.logging_config, 'model_dump'):
+                log_dict = self.logging_config.model_dump()
+            else:
+                log_dict = {}
+            hparams.update(self._flatten_config_dict(log_dict, parent_key='logging'))
+
+            # Model config
+            try:
+                model_config = self._get_model_config()
+                hparams.update(self._flatten_config_dict(model_config, parent_key='model'))
+            except NotImplementedError:
+                pass
+
+            # Loss config
+            loss_config = self._get_loss_config()
+            hparams.update(self._flatten_config_dict(loss_config, parent_key='loss'))
+
+        return hparams
+
+    def _log_hparams_to_tensorboard(self, final_train_metrics: Dict[str, float], final_val_metrics: Dict[str, float]):
+        """Log hyperparameters and final metrics to TensorBoard.
+
+        Args:
+            final_train_metrics: Final training metrics
+            final_val_metrics: Final validation metrics
+        """
+        if self.writer is None:
+            return
+
+        # Extract hyperparameters
+        hparams = self._log_hyperparameters()
+
+        # Prepare final metrics for hparams logging
+        metrics = {
+            'hparam/best_val_loss': self.best_val_loss,
+            'hparam/final_train_loss': final_train_metrics.get('train_loss', float('inf')),
+            'hparam/final_val_loss': final_val_metrics.get('val_loss', float('inf')),
+            'hparam/final_epoch': self.current_epoch,
+            'hparam/total_steps': self.global_step,
+        }
+
+        # Log to TensorBoard hparams
+        try:
+            self.writer.add_hparams(hparams, metrics)
+        except Exception as e:
+            # Log warning but don't fail training if hparams logging fails
+            print(f"Warning: Failed to log hyperparameters to TensorBoard: {e}")
     
     def _save_checkpoint(self, train_metrics: Dict[str, float], val_metrics: Dict[str, float], is_best: bool):
         """Save training checkpoint."""
