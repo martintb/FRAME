@@ -21,6 +21,7 @@ class VAETrainer(BaseTrainer):
                 input_channels=config.model.input_channels,
                 latent_channels=config.model.latent_channels,
                 channel_schedule=config.model.channel_schedule,
+                spatial_latent=config.model.spatial_latent,
                 base_channels=config.model.base_channels,
                 levels=config.model.levels,
                 logvar_mode=config.model.logvar_mode,
@@ -120,7 +121,8 @@ class VAETrainer(BaseTrainer):
                 bg_weight=getattr(config.loss, 'bg_weight', 0.5) or 0.5,
                 edge_weight=getattr(config.loss, 'edge_weight', 0.0) or 0.0,
                 free_bits=getattr(config.loss, 'free_bits', None),
-                label_smoothing=getattr(config.loss, 'label_smoothing', 0.0) or 0.0
+                label_smoothing=getattr(config.loss, 'label_smoothing', 0.0) or 0.0,
+                channel_weights=getattr(config.loss, 'channel_weights', None)
             )
         
         # Create optimizer
@@ -199,7 +201,7 @@ class VAETrainer(BaseTrainer):
         )
         
         # Set experiment reference for interruption handling
-        self.experiment = experiment
+        self.set_experiment(experiment)
         self.config = config
         self.bg_channel_name = config.data.bg_channel_name
         self.water_channel_index = config.data.water_channel_index
@@ -212,7 +214,7 @@ class VAETrainer(BaseTrainer):
         """Set data loaders after initialization."""
         self.train_loader = train_loader
         self.val_loader = val_loader
-        if getattr(self, 'is_vp_hvae', False):
+        if getattr(self, 'is_vp_hvae', False) or (not self.is_hvae):
             channel_mapping = {}
             if train_loader is not None:
                 dataset = getattr(train_loader, 'dataset', None)
@@ -372,7 +374,8 @@ class VAETrainer(BaseTrainer):
         strategy: str,
         warmup_epochs: int,
         cycle_epochs: Optional[int] = None,
-        ratio: float = 0.5
+        ratio: float = 0.5,
+        delay_epochs: int = 0
     ) -> float:
         """Compute annealing progress for a given strategy.
 
@@ -381,16 +384,24 @@ class VAETrainer(BaseTrainer):
             warmup_epochs: Number of warmup epochs for linear strategy
             cycle_epochs: Cycle length for cyclical strategy
             ratio: Fraction of cycle spent increasing (for cyclical)
+            delay_epochs: Number of epochs to delay before starting annealing
 
         Returns:
             Progress value between 0.0 and 1.0
         """
+        # Apply delay: return 0 if still in delay period
+        if self.current_epoch < delay_epochs:
+            return 0.0
+            
+        # Adjust current epoch for delay
+        adjusted_epoch = self.current_epoch - delay_epochs
+        
         if strategy == 'cyclical':
             if cycle_epochs is None or cycle_epochs <= 0:
                 return 1.0
 
             # Calculate position within current cycle
-            epoch_in_cycle = (self.current_epoch + 1) % cycle_epochs
+            epoch_in_cycle = (adjusted_epoch + 1) % cycle_epochs
 
             # Linear increase during the first (ratio * cycle_epochs) epochs
             # Then hold at max for the rest of the cycle
@@ -402,8 +413,12 @@ class VAETrainer(BaseTrainer):
         else:  # 'linear' strategy (default)
             if warmup_epochs <= 0:
                 return 1.0
-            # Linear schedule from 0 to 1 over warmup_epochs
-            return min(1.0, max(0.0, (self.current_epoch + 1) / float(warmup_epochs)))
+            # Linear schedule from 0 to 1 over warmup_epochs (after delay)
+            # Ramps from 0.0 to 1.0 over exactly warmup_epochs, reaching 1.0 at the last warmup epoch
+            if warmup_epochs == 1:
+                return 1.0  # Special case: immediate jump to 1.0
+            
+            return min(1.0, max(0.0, adjusted_epoch / float(warmup_epochs - 1)))
 
     def _current_kl_weight(self) -> Union[float, Tuple[float, float]]:
         """Compute current KL weight(s) with optional warmup or cyclical annealing."""
@@ -432,12 +447,18 @@ class VAETrainer(BaseTrainer):
             ratio_top = getattr(self.config.training, 'kl_cyclical_ratio_top', None) or \
                       getattr(self.config.training, 'kl_cyclical_ratio', 0.5)
 
+            # Get delay parameters (with fallback to unified params)
+            delay_epochs_bottom = getattr(self.config.training, 'kl_delay_epochs_bottom', None) or \
+                                getattr(self.config.training, 'kl_delay_epochs', 0) or 0
+            delay_epochs_top = getattr(self.config.training, 'kl_delay_epochs_top', None) or \
+                             getattr(self.config.training, 'kl_delay_epochs', 0) or 0
+
             # Compute progress for each latent independently
             progress_bottom = self._compute_annealing_progress(
-                strategy_bottom, warmup_epochs_bottom, cycle_epochs_bottom, ratio_bottom
+                strategy_bottom, warmup_epochs_bottom, cycle_epochs_bottom, ratio_bottom, delay_epochs_bottom
             )
             progress_top = self._compute_annealing_progress(
-                strategy_top, warmup_epochs_top, cycle_epochs_top, ratio_top
+                strategy_top, warmup_epochs_top, cycle_epochs_top, ratio_top, delay_epochs_top
             )
 
             return base_weight_bottom * progress_bottom, base_weight_top * progress_top
@@ -449,8 +470,9 @@ class VAETrainer(BaseTrainer):
             warmup_epochs = getattr(self.config.training, 'kl_warmup_epochs', 0) or 0
             cycle_epochs = getattr(self.config.training, 'kl_cyclical_cycle_epochs', None)
             ratio = getattr(self.config.training, 'kl_cyclical_ratio', 0.5)
+            delay_epochs = getattr(self.config.training, 'kl_delay_epochs', 0) or 0
 
-            progress = self._compute_annealing_progress(strategy, warmup_epochs, cycle_epochs, ratio)
+            progress = self._compute_annealing_progress(strategy, warmup_epochs, cycle_epochs, ratio, delay_epochs)
             return base_weight * progress
     
     def _log_latent_analysis(self, latent_tuple: tuple, step: int):
@@ -488,17 +510,24 @@ class VAETrainer(BaseTrainer):
         """Log latent statistics for a single latent level.
 
         Args:
-            z: Latent samples (B, C, D, H, W)
-            mu: Latent means (B, C, D, H, W)
-            logvar: Latent log-variances (B, C, D, H, W)
+            z: Latent samples - either (B, C, D, H, W) for spatial or (B, latent_dim) for non-spatial
+            mu: Latent means - either (B, C, D, H, W) for spatial or (B, latent_dim) for non-spatial
+            logvar: Latent log-variances - either (B, C, D, H, W) for spatial or (B, latent_dim) for non-spatial
             prefix: Prefix for TensorBoard tags (e.g., "latent", "latent_top", "latent_bottom")
             step: Current global step
         """
         with torch.no_grad():
-            # Average over spatial dimensions (D, H, W) -> (B, C)
-            mu_c = mu.mean(dim=(2, 3, 4))
-            std_c = (0.5 * logvar).exp().mean(dim=(2, 3, 4))
-            z_c = z.mean(dim=(2, 3, 4))
+            # Handle both spatial and non-spatial latents
+            if z.ndim == 5:
+                # Spatial latents: (B, C, D, H, W) -> average over spatial dims -> (B, C)
+                mu_c = mu.mean(dim=(2, 3, 4))
+                std_c = (0.5 * logvar).exp().mean(dim=(2, 3, 4))
+                z_c = z.mean(dim=(2, 3, 4))
+            else:
+                # Non-spatial latents: (B, latent_dim) -> already in correct shape
+                mu_c = mu
+                std_c = (0.5 * logvar).exp()
+                z_c = z
 
             # Subsample batch if too large
             B, C = mu_c.shape
@@ -661,7 +690,8 @@ class VAETrainer(BaseTrainer):
             'input_channels': self.model.input_channels,
             'latent_channels': self.model.latent_channels,
             'base_channels': self.model.base_channels,
-            'levels': self.model.levels
+            'levels': self.model.levels,
+            'spatial_latent': self.model.spatial_latent if hasattr(self.model, 'spatial_latent') else True
         }
         # Add norm_groups and skip_dropout_prob for UNetVAE
         if self.config.model.type == "unet_vae":

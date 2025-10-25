@@ -54,6 +54,10 @@ class BaseTrainer:
         else:
             self.writer = None
         
+        # Track if initial hparams have been logged
+        self.initial_hparams_logged = False
+        self.experiment_name = None  # Will be set when experiment is available
+        
         # Training state
         self.current_epoch = 0
         self.global_step = 0
@@ -67,6 +71,23 @@ class BaseTrainer:
         self.interrupted = False
         self.original_sigint_handler = None
         self.experiment = None  # Will be set by subclasses
+    
+    def set_experiment(self, experiment):
+        """Set experiment reference and update writer with experiment name."""
+        self.experiment = experiment
+        if experiment and hasattr(experiment, 'name'):
+            self.experiment_name = experiment.name
+            # Update writer with experiment name to avoid duplicate runs
+            if self.writer is not None:
+                # Close existing writer
+                self.writer.close()
+                # Create new writer with experiment name as run name
+                from torch.utils.tensorboard import SummaryWriter
+                self.writer = SummaryWriter(
+                    log_dir=self.logging_config.tensorboard_dir,
+                    comment=f"_{self.experiment_name}"  # This creates a consistent run name
+                )
+                print(f"Updated TensorBoard writer with experiment name: {self.experiment_name}")
     
     def _setup_signal_handlers(self):
         """Setup signal handlers for graceful interruption."""
@@ -299,6 +320,9 @@ class BaseTrainer:
         # Setup signal handlers
         self._setup_signal_handlers()
         
+        # Log initial hyperparameters at the start of training
+        self._log_initial_hparams()
+        
         try:
             for epoch in range(start_epoch, self.training_config.num_epochs):
                 # Check for interruption at the start of each epoch
@@ -467,7 +491,10 @@ class BaseTrainer:
         elif rtype == 'fractional_ce':
             xr_vis = torch.nn.functional.softmax(xr, dim=0)  # channel-wise probabilities for visualization
         else:
-            xr_vis = xr
+            # For MSE/L1 with volume fraction data, normalize to make argmax comparable to input
+            xr_vis = xr.clamp(min=0)  # Remove negative values
+            xr_sum = xr_vis.sum(dim=0, keepdim=True).clamp(min=1e-8)
+            xr_vis = xr_vis / xr_sum  # Normalize to sum to 1 per voxel
 
         # Compute center slice index along depth
         D = x.shape[1]
@@ -538,18 +565,18 @@ class BaseTrainer:
                 xr_img_no_water.max() if xr_img_no_water.size else 1.0,
                 1.0
             )
-            self.writer.add_image(
-                'compare/input_argmax_center_no_water',
-                x_img_no_water[None, ...] / (vmax_no_water if vmax_no_water > 0 else 1.0),
-                step,
-                dataformats='CHW'
-            )
-            self.writer.add_image(
-                'compare/recon_argmax_center_no_water',
-                xr_img_no_water[None, ...] / (vmax_no_water if vmax_no_water > 0 else 1.0),
-                step,
-                dataformats='CHW'
-            )
+            # self.writer.add_image(
+            #     'compare/input_argmax_center_no_water',
+            #     x_img_no_water[None, ...] / (vmax_no_water if vmax_no_water > 0 else 1.0),
+            #     step,
+            #     dataformats='CHW'
+            # )
+            # self.writer.add_image(
+            #     'compare/recon_argmax_center_no_water',
+            #     xr_img_no_water[None, ...] / (vmax_no_water if vmax_no_water > 0 else 1.0),
+            #     step,
+            #     dataformats='CHW'
+            # )
 
             max_abs_no_water = max(abs(diff_img_no_water.min()), abs(diff_img_no_water.max()), 1.0)
             diff_norm_no_water = (diff_img_no_water / max_abs_no_water) * 0.5 + 0.5
@@ -657,34 +684,161 @@ class BaseTrainer:
 
         return hparams
 
+    def _log_initial_hparams(self):
+        """Log hyperparameters at the start of training with placeholder metrics."""
+        if self.writer is None:
+            print("Warning: TensorBoard writer is None, skipping initial hparams logging")
+            return
+        
+        if self.initial_hparams_logged:
+            print("Initial hparams already logged, skipping")
+            return
+        
+        # For continued runs, check if hparams already exist in the log directory
+        if self.current_epoch > 0:
+            print(f"Continued run detected (starting from epoch {self.current_epoch})")
+            print("Skipping initial hparams logging to avoid duplicates")
+            self.initial_hparams_logged = True
+            return
+        
+        # Extract hyperparameters
+        hparams = self._log_hyperparameters()
+        print(f"\n{'='*80}")
+        print(f"INITIAL HPARAMS LOGGING - Logging {len(hparams)} hyperparameters at start")
+        print(f"{'='*80}")
+        
+        # Debug: print first few hparams
+        print("Sample hyperparameters (first 10):")
+        for i, (k, v) in enumerate(list(hparams.items())[:10]):
+            print(f"  {k}: {v} (type: {type(v).__name__})")
+        
+        # Sanitize hparams to ensure all values are TensorBoard-compatible
+        sanitized_hparams = {}
+        skipped = []
+        
+        for key, value in hparams.items():
+            try:
+                if isinstance(value, bool):
+                    sanitized_hparams[key] = value
+                elif isinstance(value, (int, float)):
+                    sanitized_hparams[key] = value
+                elif isinstance(value, str):
+                    sanitized_hparams[key] = value
+                elif value is None:
+                    sanitized_hparams[key] = "None"
+                elif isinstance(value, (list, tuple)):
+                    sanitized_hparams[key] = str(value)
+                else:
+                    str_val = str(value)
+                    if len(str_val) > 500:
+                        str_val = str_val[:497] + "..."
+                    sanitized_hparams[key] = str_val
+            except Exception as e:
+                print(f"  Warning: Skipping hparam '{key}' due to error: {e}")
+                skipped.append((key, type(value).__name__))
+        
+        print(f"\nSanitized to {len(sanitized_hparams)} valid hparams")
+        if skipped:
+            print(f"Skipped {len(skipped)} problematic hparams:")
+            for key, type_name in skipped[:5]:
+                print(f"  - {key} (type: {type_name})")
+        
+        # Use placeholder metrics for initial logging
+        initial_metrics = {
+            'hparam/best_val_loss': 999999.0,
+            'hparam/final_train_loss': 999999.0,
+            'hparam/final_val_loss': 999999.0,
+            'hparam/final_epoch': 0,
+            'hparam/total_steps': 0,
+        }
+        
+        print(f"\nInitial metrics (placeholders):")
+        for k, v in initial_metrics.items():
+            print(f"  {k}: {v} (type: {type(v).__name__})")
+        
+        # Log to TensorBoard hparams
+        try:
+            print(f"\nCalling writer.add_hparams() for initial logging...")
+            self.writer.add_hparams(sanitized_hparams, initial_metrics)
+            self.writer.flush()
+            self.initial_hparams_logged = True
+            
+            print(f"\n{'='*80}")
+            print(f"✓ Successfully logged initial hparams to TensorBoard")
+            print(f"  Log directory: {self.writer.log_dir}")
+            print(f"  Will be updated with final metrics at end of training")
+            print(f"{'='*80}\n")
+        except Exception as e:
+            print(f"\n{'='*80}")
+            print(f"✗ FAILED to log initial hyperparameters to TensorBoard")
+            print(f"  Error: {e}")
+            print(f"{'='*80}")
+            import traceback
+            traceback.print_exc()
+            print()
+
     def _log_hparams_to_tensorboard(self, final_train_metrics: Dict[str, float], final_val_metrics: Dict[str, float]):
-        """Log hyperparameters and final metrics to TensorBoard.
+        """Update hyperparameters with final metrics to TensorBoard.
 
         Args:
             final_train_metrics: Final training metrics
             final_val_metrics: Final validation metrics
         """
         if self.writer is None:
+            print("Warning: TensorBoard writer is None, skipping hparams update")
             return
 
-        # Extract hyperparameters
-        hparams = self._log_hyperparameters()
+        # If initial hparams weren't logged, log them now with final metrics
+        if not self.initial_hparams_logged:
+            print("Initial hparams not logged, logging now with final metrics...")
+            self._log_initial_hparams()
+            # Update the metrics after initial logging
+            self._update_hparams_metrics(final_train_metrics, final_val_metrics)
+            return
 
+        # Update existing hparams with final metrics
+        self._update_hparams_metrics(final_train_metrics, final_val_metrics)
+
+    def _update_hparams_metrics(self, final_train_metrics: Dict[str, float], final_val_metrics: Dict[str, float]):
+        """Update hparams metrics without creating new hparams entry."""
+        print(f"\n{'='*80}")
+        print(f"UPDATING HPARAMS METRICS - Updating with final values")
+        print(f"{'='*80}")
+        
         # Prepare final metrics for hparams logging
         metrics = {
-            'hparam/best_val_loss': self.best_val_loss,
-            'hparam/final_train_loss': final_train_metrics.get('train_loss', float('inf')),
-            'hparam/final_val_loss': final_val_metrics.get('val_loss', float('inf')),
-            'hparam/final_epoch': self.current_epoch,
-            'hparam/total_steps': self.global_step,
+            'hparam/best_val_loss': float(self.best_val_loss) if self.best_val_loss != float('inf') else 999999.0,
+            'hparam/final_train_loss': float(final_train_metrics.get('train_loss', 999999.0)),
+            'hparam/final_val_loss': float(final_val_metrics.get('val_loss', 999999.0)),
+            'hparam/final_epoch': int(self.current_epoch),
+            'hparam/total_steps': int(self.global_step),
         }
+        
+        print(f"\nFinal metrics to update:")
+        for k, v in metrics.items():
+            print(f"  {k}: {v} (type: {type(v).__name__})")
 
-        # Log to TensorBoard hparams
+        # Log metrics as scalars to update the existing hparams run
         try:
-            self.writer.add_hparams(hparams, metrics)
+            print(f"\nUpdating hparams metrics as scalars...")
+            for metric_name, metric_value in metrics.items():
+                self.writer.add_scalar(metric_name, metric_value, global_step=0)
+            
+            self.writer.flush()
+            
+            print(f"\n{'='*80}")
+            print(f"✓ Successfully updated hparams metrics in TensorBoard")
+            print(f"  Log directory: {self.writer.log_dir}")
+            print(f"  Updated {len(metrics)} metrics")
+            print(f"{'='*80}\n")
         except Exception as e:
-            # Log warning but don't fail training if hparams logging fails
-            print(f"Warning: Failed to log hyperparameters to TensorBoard: {e}")
+            print(f"\n{'='*80}")
+            print(f"✗ FAILED to update hparams metrics in TensorBoard")
+            print(f"  Error: {e}")
+            print(f"{'='*80}")
+            import traceback
+            traceback.print_exc()
+            print()
     
     def _save_checkpoint(self, train_metrics: Dict[str, float], val_metrics: Dict[str, float], is_best: bool):
         """Save training checkpoint."""

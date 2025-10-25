@@ -37,6 +37,7 @@ latent_channels = 128 # Small latent space dimension
 channel_schedule = [16, 32, 64]  # Channel sizes at each level (inferred levels = 2)
 # Alternatively, use legacy params: base_channels = 32, levels = 2
 norm_groups = 8  # Number of groups for GroupNorm (UNetVAE only)
+spatial_latent = true  # Use spatial latents (B, C, D, H, W) instead of flat vector (B, latent_channels)
 
 # Variance modeling strategy (controls how the encoder predicts variance)
 # Options:
@@ -47,13 +48,12 @@ logvar_mode = "learned"
 fixed_logvar_value = 0.0  # Only used when logvar_mode = "fixed" (0.0 means std=1.0)
 
 [training]
-device = "cuda"  # "cuda", "mps", or "cpu"
+device = "mps"  # "cuda", "mps", or "cpu"
 distributed = false  # Set true for DDP
 num_epochs = 500
 num_workers = 4
 batch_size = 32  # May need to reduce to 2-3 due to larger base_channels
 learning_rate = 2e-4
-optimizer = "adam"  # AdamW for better generalization
 optimizer = "adam"  # AdamW for better generalization
 scheduler = "cosine"  # "cosine", "step", or "none"
 grad_clip = 1.0  # Gradient clipping value (0 to disable)

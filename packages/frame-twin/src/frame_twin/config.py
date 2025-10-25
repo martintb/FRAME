@@ -86,6 +86,9 @@ class VAEModelConfig(BaseModel):
     norm_groups: int = Field(8, gt=0)  # Number of groups for GroupNorm (UNetVAE only)
     skip_dropout_prob: float = Field(0.0, ge=0.0, le=1.0, description="Probability of dropping skip connections during training (UNetVAE only)")
 
+    # Latent space configuration
+    spatial_latent: bool = Field(True, description="If True, use spatial latents (B, C, D, H, W). If False, use flat vector latents (B, latent_channels)")
+
     # Logvar strategy
     logvar_mode: Literal["learned", "fixed", "scalar"] = Field("learned", description="Variance modeling: 'learned' (full spatial), 'fixed' (constant), 'scalar' (single learnable parameter)")
     fixed_logvar_value: float = Field(0.0, description="Fixed log-variance value when logvar_mode='fixed' (0.0 corresponds to std=1.0)")
@@ -238,18 +241,21 @@ class TrainingConfig(BaseModel):
     grad_clip: Optional[float] = Field(None, ge=0.0)  # Gradient clipping value (None to disable)
 
     # KL annealing parameters (unified - for backward compatibility)
+    kl_delay_epochs: Optional[int] = Field(0, ge=0, description="Number of epochs to delay before starting KL annealing (KL weight = 0 during delay)")
     kl_warmup_epochs: Optional[int] = Field(0, ge=0)  # Linear KL warmup epochs (used when kl_annealing_strategy="linear")
     kl_annealing_strategy: Literal["linear", "cyclical"] = Field("linear", description="KL annealing strategy: 'linear' for one-time warmup, 'cyclical' for periodic restarts")
     kl_cyclical_cycle_epochs: Optional[int] = Field(None, gt=0, description="Number of epochs per cycle (only for cyclical strategy)")
     kl_cyclical_ratio: Optional[float] = Field(None, gt=0.0, le=1.0, description="Fraction of each cycle spent increasing KL weight (only for cyclical strategy, e.g., 0.5 = half up, half at max)")
 
     # KL annealing parameters for HVAE - bottom latent (z1)
+    kl_delay_epochs_bottom: Optional[int] = Field(None, ge=0, description="Number of epochs to delay KL for bottom latent (overrides unified if set)")
     kl_warmup_epochs_bottom: Optional[int] = Field(None, ge=0, description="Linear KL warmup epochs for bottom latent (overrides unified if set)")
     kl_annealing_strategy_bottom: Optional[Literal["linear", "cyclical"]] = Field(None, description="KL annealing strategy for bottom latent (overrides unified if set)")
     kl_cyclical_cycle_epochs_bottom: Optional[int] = Field(None, gt=0, description="Number of epochs per cycle for bottom latent (only for cyclical strategy)")
     kl_cyclical_ratio_bottom: Optional[float] = Field(None, gt=0.0, le=1.0, description="Fraction of each cycle spent increasing for bottom latent")
 
     # KL annealing parameters for HVAE - top latent (z2)
+    kl_delay_epochs_top: Optional[int] = Field(None, ge=0, description="Number of epochs to delay KL for top latent (overrides unified if set)")
     kl_warmup_epochs_top: Optional[int] = Field(None, ge=0, description="Linear KL warmup epochs for top latent (overrides unified if set)")
     kl_annealing_strategy_top: Optional[Literal["linear", "cyclical"]] = Field(None, description="KL annealing strategy for top latent (overrides unified if set)")
     kl_cyclical_cycle_epochs_top: Optional[int] = Field(None, gt=0, description="Number of epochs per cycle for top latent (only for cyclical strategy)")

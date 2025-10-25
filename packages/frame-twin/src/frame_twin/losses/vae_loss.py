@@ -4,7 +4,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Dict
 
 
 def simplex_renorm(p: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
@@ -25,7 +25,8 @@ def recon_loss_fractional(
     logits: torch.Tensor,
     p: torch.Tensor,
     label_smoothing: float = 0.0,
-    eps: float = 1e-8
+    eps: float = 1e-8,
+    channel_weights: Optional[torch.Tensor] = None
 ) -> torch.Tensor:
     """Fractional (soft) cross-entropy loss with soft labels.
 
@@ -53,7 +54,14 @@ def recon_loss_fractional(
 
     # Stable log-softmax and cross-entropy
     log_q = F.log_softmax(logits, dim=1)
-    nll = -(p * log_q).sum(dim=1)  # Sum over channels, NLL per voxel
+    
+    # Apply channel weights if provided
+    if channel_weights is not None:
+        # Reshape weights for broadcasting: (1, C, 1, 1, 1)
+        weights = channel_weights.view(1, -1, 1, 1, 1)
+        nll = -(p * log_q * weights).sum(dim=1)  # Sum over channels, NLL per voxel
+    else:
+        nll = -(p * log_q).sum(dim=1)  # Sum over channels, NLL per voxel
 
     return nll.mean()  # Mean over voxels and batch
 
@@ -99,7 +107,8 @@ class VAELoss(nn.Module):
         bg_weight: float = 0.5,
         edge_weight: float = 0.0,
         free_bits: Optional[float] = None,
-        label_smoothing: float = 0.0
+        label_smoothing: float = 0.0,
+        channel_weights: Optional[Dict[str, float]] = None
     ):
         super().__init__()
 
@@ -111,10 +120,47 @@ class VAELoss(nn.Module):
         self.edge_weight = edge_weight
         self.free_bits = free_bits
         self.label_smoothing = label_smoothing
+        self.channel_weight_config = (
+            {k: float(v) for k, v in channel_weights.items()} if channel_weights else {}
+        )
+        self._channel_weights_tensor: Optional[torch.Tensor] = None
+        self._channel_weights_device: Optional[torch.device] = None
+        self._channel_weights_len: Optional[int] = None
+        self._channel_mapping: Dict[str, int] = {}
+        self.last_channel_weights_norm = 1.0
 
         # Create 3D Sobel filters for gradient computation (if edge loss is enabled)
         if self.edge_weight > 0:
             self._create_sobel_filters()
+    
+    def set_channel_mapping(self, channel_mapping: Optional[Dict[str, int]]):
+        """Provide channel name → index mapping (from voxel library)."""
+        self._channel_mapping = channel_mapping or {}
+        self._channel_weights_tensor = None
+        self._channel_weights_device = None
+        self._channel_weights_len = None
+    
+    def _get_channel_weights(self, n_channels: int, device: torch.device) -> torch.Tensor:
+        """Return tensor of per-channel weights matching current mapping."""
+        if not self.channel_weight_config:
+            return torch.ones(n_channels, device=device)
+
+        needs_update = (
+            self._channel_weights_tensor is None or
+            self._channel_weights_len != n_channels or
+            self._channel_weights_device != device
+        )
+
+        if needs_update:
+            weights = torch.ones(n_channels, dtype=torch.float32, device=device)
+            for name, idx in self._channel_mapping.items():
+                if 0 <= idx < n_channels:
+                    weight = self.channel_weight_config.get(name, 1.0)
+                    weights[idx] = float(weight)
+            self._channel_weights_tensor = weights
+            self._channel_weights_len = n_channels
+            self._channel_weights_device = device
+        return self._channel_weights_tensor
     
     def _create_sobel_filters(self):
         """Create 3D Sobel filters for computing gradients in x, y, z directions."""
@@ -186,14 +232,31 @@ class VAELoss(nn.Module):
         return F.l1_loss(grad_recon, grad_target)
     
     def _recon_loss(self, x_recon: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+        # Get channel weights if configured
+        C = x.size(1)
+        weights = None
+        if self.channel_weight_config:
+            weights = self._get_channel_weights(C, x.device)
+            # Reshape for broadcasting: (1, C, 1, 1, 1)
+            weights = weights.view(1, C, 1, 1, 1)
+        
         if self.reconstruction_type == "mse":
-            return F.mse_loss(x_recon, x)
+            if weights is not None:
+                return ((x_recon - x) ** 2 * weights).mean()
+            else:
+                return F.mse_loss(x_recon, x)
         elif self.reconstruction_type == "l1":
-            return F.l1_loss(x_recon, x)
+            if weights is not None:
+                return (torch.abs(x_recon - x) * weights).mean()
+            else:
+                return F.l1_loss(x_recon, x)
         elif self.reconstruction_type == "bce_logits":
+            # BCE doesn't benefit from channel weights in the same way
             return F.binary_cross_entropy_with_logits(x_recon, x)
         elif self.reconstruction_type == "fractional_ce":
-            return recon_loss_fractional(x_recon, x, label_smoothing=self.label_smoothing)
+            return recon_loss_fractional(x_recon, x, 
+                                         label_smoothing=self.label_smoothing,
+                                         channel_weights=weights.squeeze() if weights is not None else None)
         else:
             raise ValueError(f"Unknown reconstruction type: {self.reconstruction_type}")
 
@@ -271,9 +334,13 @@ class VAELoss(nn.Module):
         if self.free_bits is not None and self.free_bits > 0:
             # Free bits: ensure each latent dimension contributes at least free_bits nats
             # This prevents individual dimensions from collapsing to zero
-            # Shape: (B, C, D, H, W) -> sum over spatial dims, clamp, then mean over batch and channels
-            kl_per_dim_spatial = kl_per_dim.mean(dim=(2, 3, 4))  # (B, C)
-            kl_clamped = torch.clamp(kl_per_dim_spatial, min=self.free_bits)
+            if kl_per_dim.ndim == 5:
+                # Spatial latents: (B, C, D, H, W) -> average over spatial dims first
+                kl_per_dim_channel = kl_per_dim.mean(dim=(2, 3, 4))  # (B, C)
+            else:
+                # Non-spatial latents: (B, latent_dim) -> already in correct shape
+                kl_per_dim_channel = kl_per_dim  # (B, latent_dim)
+            kl_clamped = torch.clamp(kl_per_dim_channel, min=self.free_bits)
             kl_loss = kl_clamped.mean()
         else:
             # Standard KL loss - mean reduction

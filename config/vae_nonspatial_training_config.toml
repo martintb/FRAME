@@ -1,0 +1,94 @@
+# Non-Spatial VAE Training Configuration for frame-twin
+# Uses flat vector latents instead of spatial latents for higher compression
+#
+# Key differences from spatial VAE:
+# - spatial_latent = false: Encoder produces (B, latent_channels) instead of (B, C, D, H, W)
+# - Much smaller total latent dimensions (e.g., 512 vs 32768 for spatial)
+# - Better for learning global structure over local details
+# - Decoder projects from vector to spatial grid before upsampling
+
+[metadata]
+name = "lnp_vae_nonspatial_mse_channel_weights"
+description = "Non-spatial VAE training with flat vector latents and MSE reconstruction"
+random_seed = 42
+
+[data]
+# library_uuid = "lib_17db5bb2f223"  # lnp_10k_10ch_lhs library
+library_uuid = "lib_3a9f32aad000"  # lnp_1k_10ch_lhs library
+split_strategy = "random"
+train_ratio = 0.8
+val_ratio = 0.1
+test_ratio = 0.1
+
+# Data augmentation
+random_crop_size = 64  # Train on random 64^3 crops
+random_rotation = true  # Apply random 90-degree rotations and flips
+reject_bg_only_crops = true  # Skip crops that contain only background voxels
+bg_channel_name = "water"  # Background channel identified by name
+max_bg_crop_attempts = 32  # Retry random crops up to this many times
+
+[model]
+type = "vae"  # "vae" or "unet_vae"
+input_channels = 10  # Number of material channels
+latent_channels = 1024  # Latent dimension (flat vector, NOT spatial channels)
+channel_schedule = [32, 64, 128]  # Channel sizes at each level (3 levels)
+spatial_latent = false  # Non-spatial latents: (B, latent_channels) instead of (B, C, D, H, W)
+
+# Variance modeling strategy
+# For non-spatial latents, "learned" means each of the latent_channels dims gets its own logvar
+logvar_mode = "learned"  # "learned", "fixed", or "scalar"
+fixed_logvar_value = 0.0  # Only used when logvar_mode = "fixed"
+
+[training]
+device = "mps"  # "cuda", "mps", or "cpu"
+distributed = false
+num_epochs = 500
+num_workers = 0
+batch_size = 16
+learning_rate = 2e-4
+optimizer = "adam"
+scheduler = "cosine"
+grad_clip = 1.0
+
+# KL annealing configuration
+kl_annealing_strategy = "linear"
+kl_delay_epochs = 20  # Epochs to delay before starting KL annealing (KL weight = 0 during delay)
+kl_warmup_epochs = 20  # Epochs to reach full KL weight (after delay)
+kl_cyclical_cycle_epochs = 10
+kl_cyclical_ratio = 0.5
+
+[loss]
+reconstruction_weight = 1.0
+kl_weight = 1.0
+free_bits = 0.0  # Minimum KL per latent dimension
+reconstruction_type = "fractional_ce"  # "mse" | "l1" | "bce_logits" | "fractional_ce"
+mask_threshold = 0.0
+bg_weight = 0.0
+edge_weight = 0.0
+label_smoothing = 0.0
+
+[loss.channel_weights]
+shell1_head = 100.0
+shell1_tail = 100.0
+shell2_head = 100.0
+shell2_tail = 100.0
+payload_core = 100.0
+payload_head = 100.0
+payload_tail = 100.0
+bleb_head = 100.0
+bleb_tail = 100.0
+water = 0.0001
+
+[checkpointing]
+experiments_dir = "/Users/tbm/frame_data/experiments"
+save_every_epochs = 1
+save_every_minutes = 60
+keep_last_n = 10
+save_best = true
+
+[logging]
+log_every_steps = 25
+n_recon_compare = 25
+n_analyze_latent = 50
+max_latent_analysis_samples = 32
+
