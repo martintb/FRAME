@@ -9,7 +9,7 @@ Icon?
 # Outputs
 output/
 outputs/
-data/
+./data/
 visualizations/
 generated_structures/
 
