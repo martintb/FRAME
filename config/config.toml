@@ -3,6 +3,7 @@
 
 [frame]
 # Root directory for all FRAME data (libraries and experiments)
+#data_root = "/home/ubuntu/frame-uswest1/frame_data"
 data_root = "/Users/tbm/frame_data"
 
 [frame.paths]
