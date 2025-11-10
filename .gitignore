@@ -115,3 +115,4 @@ docs/site/
 dev/
 .cursor/plans/
 frame_data/
+correlation_analysis*/*

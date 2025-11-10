@@ -2,13 +2,14 @@
 # This config trains a DDPM model with FiLM conditioning and Classifier-Free Guidance
 
 [metadata]
-name = "ddpm_lnp_film_cfg"
+name = "ddpm_lnp_film"
 description = "DDPM training with FiLM conditioning and CFG for LNP structures"
 random_seed = 42
 
 [data]
 # Reference the data library by UUID (use 'frame library list' to find UUID)
-library_uuid = "lib_454c2a20e77b"  # lnp_5k_10ch library
+# library_uuid = "lib_17db5bb2f223"  # lnp_10k_10ch_lhs library
+library_uuid = "lib_3a9f32aad000"  # lnp_1k_10ch_lhs library
 split_strategy = "random"
 train_ratio = 0.8
 val_ratio = 0.1
@@ -17,17 +18,17 @@ test_ratio = 0.1
 [model]
 type = "ddpm"
 conditioning_strategy = "film"  # Options: "concat", "cross_attention", "adaptive_norm", "film"
-vae_experiment_uuid = "exp_537908480581"  # Reference UNetVAE experiment by UUID
+vae_experiment_uuid = "exp_244072d3529b"  # Reference experiment by UUID
 freeze_vae = true
-latent_channels = 8
+# latent_channels is inferred from VAE, but can be overridden if needed
 timesteps = 1000
 beta_schedule = "cosine"  # Cosine schedule often works better than linear
-unet_channels = [16, 32, 64, 128]
-attention_resolutions = [8, 16]
+unet_channels = [64, 64, 128, 256, 512]
+attention_resolutions = [2,4,8]
 
 # Classifier-free guidance parameters
-conditioning_dropout = 0.1  # 10% chance to drop conditioning during training
-cfg_scale = 2.0  # Guidance scale for validation samples (1.0 = no guidance)
+conditioning_dropout = 0.25  # 10% chance to drop conditioning during training
+cfg_scale = 3.0  # Guidance scale for validation samples (1.0 = no guidance)
 
 [model.conditioning]
 # Shared parameters
@@ -48,7 +49,7 @@ device = "mps"
 distributed = false
 num_epochs = 200
 num_workers = 0
-batch_size = 2
+batch_size = 32
 learning_rate = 2e-4
 optimizer = "adam"
 scheduler = "cosine"
@@ -58,11 +59,11 @@ loss_type = "mse"  # "mse" or "mae"
 
 [checkpointing]
 experiments_dir = "/Users/tbm/frame_data/experiments"  # Base directory for experiments
-save_every_epochs = 5
+save_every_epochs = 1
 save_every_minutes = 60
-keep_last_n = 3
+keep_last_n = 10
 save_best = true
 
 [logging]
 log_every_steps = 50
-n_recon_compare = 100  # Log generated samples every N steps (both training and validation)
+recon_compare_every_epochs = 1  # Log reconstruction comparison every N epochs (0=disabled)

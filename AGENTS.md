@@ -198,6 +198,7 @@ frame/
   - Training runs automatically create experiments
   - Checkpoints are versioned and linked to experiments
   - Resuming training creates derived experiments with lineage
+  - **Continue training** with modified configs creates new experiments with bidirectional tracking
 
 - **frame-geo**: ⚠️ **Partially integrated** (LibraryManager only)
   - Libraries are registered and tracked
@@ -211,6 +212,14 @@ frame/
 - Track dependencies (e.g., VAE experiment for DDPM training)
 - Use tags for organization (e.g., "preliminary", "production", "failed")
 - Never manually edit experiment metadata files
+
+**Continuing training** (as of 2025-10-27):
+- Use `uv run frame twin continue <exp_uuid> --config <modified.toml>` to continue from a checkpoint
+- Creates a NEW experiment (not resume in-place) with full provenance tracking
+- Original experiment records: which new experiments continued from it and which checkpoint was used
+- New experiment records: which experiment/checkpoint it continued from
+- Modified configs are stored in both experiments for full reproducibility
+- View lineage with `uv run frame experiment show <exp_uuid>`
 
 ---
 

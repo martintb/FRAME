@@ -57,7 +57,8 @@ class ResidualBlock3D(nn.Module):
         out_channels: int,
         time_emb_dim: int,
         conditioning_dim: Optional[int] = None,
-        dropout: float = 0.1
+        dropout: float = 0.1,
+        film_layer_factory: Optional[callable] = None
     ):
         super().__init__()
         
@@ -80,13 +81,18 @@ class ResidualBlock3D(nn.Module):
         else:
             self.skip_conv = nn.Identity()
         
-        # Conditioning (for adaptive normalization)
-        if conditioning_dim is not None:
-            self.conditioning_mlp = nn.Sequential(
-                nn.Linear(conditioning_dim, out_channels * 2),
-                nn.SiLU(),
-                nn.Linear(out_channels * 2, out_channels * 2)
-            )
+        # Conditioning (FiLM or adaptive normalization)
+        if conditioning_dim is not None and conditioning_dim > 0:
+            if film_layer_factory is not None:
+                # Use FiLM layer factory if provided
+                self.conditioning_mlp = film_layer_factory(out_channels)
+            else:
+                # Default adaptive normalization MLP
+                self.conditioning_mlp = nn.Sequential(
+                    nn.Linear(conditioning_dim, out_channels * 2),
+                    nn.SiLU(),
+                    nn.Linear(out_channels * 2, out_channels * 2)
+                )
         else:
             self.conditioning_mlp = None
     
@@ -106,7 +112,7 @@ class ResidualBlock3D(nn.Module):
         # Add time embedding
         h = h + time_emb[..., None, None, None]
         
-        # Conditioning (adaptive normalization)
+        # Conditioning (FiLM or adaptive normalization)
         if self.conditioning_mlp is not None and conditioning is not None:
             cond_emb = self.conditioning_mlp(conditioning)
             scale, shift = cond_emb.chunk(2, dim=-1)
@@ -180,7 +186,8 @@ class UNet3D(nn.Module):
         attention_resolutions: List[int] = [8, 16],
         dropout: float = 0.1,
         time_embed_dim: int = 256,
-        conditioning_dim: Optional[int] = None
+        conditioning_dim: Optional[int] = None,
+        film_layer_factory: Optional[callable] = None
     ):
         super().__init__()
         
@@ -189,7 +196,10 @@ class UNet3D(nn.Module):
         self.model_channels = model_channels
         self.out_channels_mult = out_channels_mult
         self.num_res_blocks = num_res_blocks
-        self.attention_resolutions = attention_resolutions
+        # Filter out attention resolutions that exceed max downsample factor
+        max_ds = 2 ** (len(out_channels_mult) - 1)
+        self.attention_resolutions = [r for r in attention_resolutions if r <= max_ds]
+        self.film_layer_factory = film_layer_factory
         
         # Time embedding
         self.time_embed = TimeEmbedding(time_embed_dim)
@@ -209,12 +219,12 @@ class UNet3D(nn.Module):
             # Residual blocks
             for _ in range(num_res_blocks):
                 self.down_blocks.append(
-                    ResidualBlock3D(ch, out_ch, time_embed_dim, conditioning_dim, dropout)
+                    ResidualBlock3D(ch, out_ch, time_embed_dim, conditioning_dim, dropout, film_layer_factory)
                 )
                 ch = out_ch
             
             # Attention
-            if ds in attention_resolutions:
+            if ds in self.attention_resolutions:
                 self.down_blocks.append(AttentionBlock3D(ch))
             
             # Downsample (except last)
@@ -225,9 +235,9 @@ class UNet3D(nn.Module):
                 self.down_samples.append(nn.Identity())
         
         # Middle
-        self.middle_block1 = ResidualBlock3D(ch, ch, time_embed_dim, conditioning_dim, dropout)
+        self.middle_block1 = ResidualBlock3D(ch, ch, time_embed_dim, conditioning_dim, dropout, film_layer_factory)
         self.middle_attn = AttentionBlock3D(ch)
-        self.middle_block2 = ResidualBlock3D(ch, ch, time_embed_dim, conditioning_dim, dropout)
+        self.middle_block2 = ResidualBlock3D(ch, ch, time_embed_dim, conditioning_dim, dropout, film_layer_factory)
         
         # Upsampling
         self.up_blocks = nn.ModuleList()
@@ -243,12 +253,12 @@ class UNet3D(nn.Module):
             # Residual blocks
             for j in range(num_res_blocks + 1):
                 self.up_blocks.append(
-                    ResidualBlock3D(ch + (out_ch if j == 0 else 0), out_ch, time_embed_dim, conditioning_dim, dropout)
+                    ResidualBlock3D(ch + (out_ch if j == 0 else 0), out_ch, time_embed_dim, conditioning_dim, dropout, film_layer_factory)
                 )
                 ch = out_ch
             
             # Attention
-            if ds in attention_resolutions:
+            if ds in self.attention_resolutions:
                 self.up_blocks.append(AttentionBlock3D(ch))
             ds //= 2
         
@@ -399,8 +409,15 @@ class DDPM(nn.Module):
         
         # U-Net
         conditioning_dim = None
+        film_layer_factory = None
         if conditioning_strategy is not None:
             conditioning_dim = conditioning_strategy.get_conditioning_dim()
+            # If conditioning_dim is 0, treat as no conditioning
+            if conditioning_dim == 0:
+                conditioning_dim = None
+            # If FiLM strategy, provide factory function
+            elif hasattr(conditioning_strategy, 'create_film_layer'):
+                film_layer_factory = conditioning_strategy.create_film_layer
         
         # Determine U-Net input channels. For concatenation-based conditioning,
         # the conditioning tensor is concatenated to x along the channel axis,
@@ -416,7 +433,8 @@ class DDPM(nn.Module):
             model_channels=unet_channels[0],
             out_channels_mult=[c // unet_channels[0] for c in unet_channels],
             attention_resolutions=attention_resolutions,
-            conditioning_dim=conditioning_dim
+            conditioning_dim=conditioning_dim,
+            film_layer_factory=film_layer_factory
         )
     
     def q_sample(self, x_start: torch.Tensor, t: torch.Tensor, noise: Optional[torch.Tensor] = None) -> torch.Tensor:

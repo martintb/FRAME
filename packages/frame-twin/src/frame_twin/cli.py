@@ -703,16 +703,22 @@ def continue_training(experiment_uuid: str, config_path: Optional[str] = None):
     """
     from frame.management import ExperimentManager, CheckpointManager
     
-    print(f"Loading experiment {experiment_uuid}...")
+    print("\n" + "="*80)
+    print("CONTINUING TRAINING FROM EXISTING EXPERIMENT")
+    print("="*80)
+    
+    print(f"\nLoading original experiment {experiment_uuid}...")
     exp_mgr = ExperimentManager()
     experiment = exp_mgr.get_experiment(experiment_uuid)
     
     if experiment is None:
         raise ValueError(f"Experiment {experiment_uuid} not found")
     
-    print(f"Found experiment: {experiment.name} ({experiment.model_type})")
-    print(f"Status: {experiment.status}")
-    print(f"Checkpoints: {len(experiment.checkpoints)}")
+    print(f"  Name: {experiment.name}")
+    print(f"  Model type: {experiment.model_type}")
+    print(f"  Status: {experiment.status}")
+    print(f"  Path: {experiment.path}")
+    print(f"  Checkpoints: {len(experiment.checkpoints)}")
     
     # Find the latest checkpoint
     ckpt_mgr = CheckpointManager()
@@ -736,36 +742,38 @@ def continue_training(experiment_uuid: str, config_path: Optional[str] = None):
                 f"Best checkpoint {experiment.best_checkpoint} is marked in the experiment, "
                 "but could not be resolved. Re-run 'frame checkpoint set-best' to repair."
             )
+        print(f"\nUsing marked BEST checkpoint:")
     else:
         resume_checkpoint = checkpoints[-1]
-        print(
-            "No best checkpoint marked for this experiment; resuming from the latest checkpoint "
-            f"(epoch {resume_checkpoint.epoch}, step {resume_checkpoint.step})."
-        )
+        print(f"\nUsing LATEST checkpoint (no best checkpoint marked):")
     
-    print(f"Resuming from checkpoint: {resume_checkpoint.uuid}")
+    print(f"  UUID: {resume_checkpoint.uuid}")
     print(f"  Epoch: {resume_checkpoint.epoch}, Step: {resume_checkpoint.step}")
     print(f"  Timestamp: {resume_checkpoint.timestamp}")
+    if resume_checkpoint.metrics:
+        print(f"  Metrics: {resume_checkpoint.metrics}")
     
     # Determine config to use
     if config_path:
-        print(f"Using updated config: {config_path}")
+        print(f"\nUsing UPDATED config: {config_path}")
         config_file = Path(config_path)
-        # Copy to experiment directory for tracking
+        # Copy to original experiment directory for tracking
         continued_config = experiment.add_continuation_config(config_file)
-        print(f"Copied config to: {continued_config}")
+        print(f"  Copied to original experiment: {continued_config}")
     else:
         # Use original config
         original_config = experiment.path / "configs" / "initial_config.toml"
         if not original_config.exists():
             raise ValueError(f"Original config not found at {original_config}")
         config_file = original_config
-        print(f"Using original config: {config_file}")
+        print(f"\nUsing ORIGINAL config: {config_file}")
     
     # Load config and determine model type
     if experiment.model_type in ['vae', 'unet_vae', 'hvae', 'vp_hvae']:
         config = VAEConfig.from_toml(str(config_file))
-        print("Resuming VAE/HVAE/VP-HVAE training...")
+        print("\n" + "-"*80)
+        print("Creating NEW experiment for continuation...")
+        print("-"*80)
         
         # Create a new experiment for continuation
         exp_mgr = ExperimentManager()
@@ -775,15 +783,34 @@ def continue_training(experiment_uuid: str, config_path: Optional[str] = None):
             library_uuid=experiment.library_uuid,
             config_path=config_file,
             tags=experiment.tags + ["continued"],
-            dependencies={"continued_from": experiment.uuid}
+            dependencies={
+                "continued_from": experiment.uuid,
+                "continued_from_checkpoint": resume_checkpoint.uuid
+            }
         )
+        
+        print(f"\n✓ Created new experiment:")
+        print(f"  UUID: {continued_experiment.uuid}")
+        print(f"  Name: {continued_experiment.name}")
+        print(f"  Path: {continued_experiment.path}")
+        print(f"  Initial config: {continued_experiment.path / 'configs' / 'initial_config.toml'}")
+        
+        # Add continuation reference to original experiment
+        experiment.add_continuation_reference(continued_experiment.uuid, resume_checkpoint.uuid)
+        print(f"\n✓ Added continuation reference to original experiment")
+        
+        print("\n" + "="*80)
+        print("STARTING TRAINING")
+        print("="*80 + "\n")
         
         # Load the checkpoint into the trainer and resume
         train_vae_with_checkpoint(str(config_file), continued_experiment, resume_checkpoint.checkpoint_path)
         
     elif experiment.model_type == 'ddpm':
         config = DDPMConfig.from_toml(str(config_file))
-        print("Resuming DDPM training...")
+        print("\n" + "-"*80)
+        print("Creating NEW experiment for continuation...")
+        print("-"*80)
         
         # Create a new experiment for continuation
         exp_mgr = ExperimentManager()
@@ -793,8 +820,25 @@ def continue_training(experiment_uuid: str, config_path: Optional[str] = None):
             library_uuid=experiment.library_uuid,
             config_path=config_file,
             tags=experiment.tags + ["continued"],
-            dependencies={"continued_from": experiment.uuid}
+            dependencies={
+                "continued_from": experiment.uuid,
+                "continued_from_checkpoint": resume_checkpoint.uuid
+            }
         )
+        
+        print(f"\n✓ Created new experiment:")
+        print(f"  UUID: {continued_experiment.uuid}")
+        print(f"  Name: {continued_experiment.name}")
+        print(f"  Path: {continued_experiment.path}")
+        print(f"  Initial config: {continued_experiment.path / 'configs' / 'initial_config.toml'}")
+        
+        # Add continuation reference to original experiment
+        experiment.add_continuation_reference(continued_experiment.uuid, resume_checkpoint.uuid)
+        print(f"\n✓ Added continuation reference to original experiment")
+        
+        print("\n" + "="*80)
+        print("STARTING TRAINING")
+        print("="*80 + "\n")
         
         # Load the checkpoint into the trainer and resume
         train_ddpm_with_checkpoint(str(config_file), continued_experiment, resume_checkpoint.checkpoint_path)
@@ -862,7 +906,7 @@ save_best = true  # Save best validation loss
 
 [logging]
 log_every_steps = 50
-n_recon_compare = 100  # Log reconstruction comparison every N steps
+recon_compare_every_epochs = 1  # Log reconstruction comparison every N epochs (0=disabled)
 """
     
     elif model_type == 'unet_vae':
@@ -919,7 +963,7 @@ save_best = true  # Save best validation loss
 
 [logging]
 log_every_steps = 25
-n_recon_compare = 100
+recon_compare_every_epochs = 1  # Log reconstruction comparison every N epochs (0=disabled)
 """
     
     elif model_type == 'ddpm':
@@ -989,7 +1033,7 @@ save_best = true
 
 [logging]
 log_every_steps = 50
-n_recon_compare = 100  # Log generated samples every N steps (both training and validation)
+recon_compare_every_epochs = 1  # Log reconstruction comparison every N epochs (0=disabled)
 """
     
     elif model_type == 'hvae':
@@ -1076,7 +1120,7 @@ save_best = true  # Save best validation loss
 
 [logging]
 log_every_steps = 50
-n_recon_compare = 100  # Log reconstruction comparison every N steps
+recon_compare_every_epochs = 1  # Log reconstruction comparison every N epochs (0=disabled)
 n_analyze_latent = 200  # Analyze latent space every N steps (0=disabled)
 max_latent_analysis_samples = 128  # Max samples for latent histograms
 """

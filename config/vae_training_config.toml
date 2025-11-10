@@ -15,8 +15,8 @@ description = "VAE training"
 random_seed = 42
 
 [data]
-# library_uuid = "lib_3a9f32aad000"  # lnp_10k_10ch_lhs library
 library_uuid = "lib_17db5bb2f223"  # lnp_10k_10ch_lhs library
+# library_uuid = "lib_3a9f32aad000"  # lnp_1k_10ch_lhs library
 split_strategy = "random"  # or "stratified"
 train_ratio = 0.8
 val_ratio = 0.1
@@ -34,7 +34,7 @@ max_bg_crop_attempts = 32  # Retry random crops up to this many times
 type = "vae"  # "vae" or "unet_vae"
 input_channels = 10  # Number of material channels
 latent_channels = 128 # Small latent space dimension
-channel_schedule = [16, 32, 64]  # Channel sizes at each level (inferred levels = 2)
+channel_schedule = [16,32,64,128,256]  # Channel sizes at each level (inferred levels = 2)
 # Alternatively, use legacy params: base_channels = 32, levels = 2
 norm_groups = 8  # Number of groups for GroupNorm (UNetVAE only)
 spatial_latent = true  # Use spatial latents (B, C, D, H, W) instead of flat vector (B, latent_channels)
@@ -44,15 +44,16 @@ spatial_latent = true  # Use spatial latents (B, C, D, H, W) instead of flat vec
 #   "learned": Full spatial logvar prediction (default, most flexible)
 #   "fixed": Constant logvar (fast, simple, good for compression)
 #   "scalar": Single learnable parameter for all positions (compromise)
-logvar_mode = "learned"
+logvar_mode = "fixed"
 fixed_logvar_value = 0.0  # Only used when logvar_mode = "fixed" (0.0 means std=1.0)
 
 [training]
 device = "mps"  # "cuda", "mps", or "cpu"
 distributed = false  # Set true for DDP
 num_epochs = 500
-num_workers = 4
-batch_size = 32  # May need to reduce to 2-3 due to larger base_channels
+num_workers = 0
+batch_size = 32  # 16 for 1k library, 32 for 10k library
+# batch_size = 16 # 16 for 1k library, 32 for 10k library
 learning_rate = 2e-4
 optimizer = "adam"  # AdamW for better generalization
 scheduler = "cosine"  # "cosine", "step", or "none"
@@ -60,19 +61,24 @@ grad_clip = 1.0  # Gradient clipping value (0 to disable)
 
 # KL annealing configuration
 kl_annealing_strategy = "linear"  # "linear" or "cyclical"
-kl_warmup_epochs = 50  # For linear strategy: epochs to reach full KL weight
+
+
+kl_warmup_epochs = 10 #was 60 # For linear strategy: epochs to reach full KL weight (after delay)
+# kl_warmup_epochs = 20  # For linear strategy: epochs to reach full KL weight (after delay)
+# kl_delay_epochs = 0  # Epochs to delay before starting KL annealing (KL weight = 0 during delay)
+
 kl_cyclical_cycle_epochs = 10  # For cyclical strategy: epochs per cycle
 kl_cyclical_ratio = 0.5  # For cyclical strategy: fraction of cycle spent increasing (0.5 = half up, half at max)
 
 [loss]
 reconstruction_weight = 1.0
-kl_weight = 0.1
-free_bits = 0.5  # Minimum KL per latent dimension (prevents per-dim collapse)
+kl_weight = 0.0001
+free_bits = 0.3  # Minimum KL per latent dimension (prevents per-dim collapse)
 reconstruction_type = "fractional_ce"  # "mse" | "l1" | "bce_logits"
 mask_threshold = 0.0
 bg_weight = 0.0
 edge_weight = 0.0  # Small edge loss for sharper boundaries (was 0.0)
-label_smoothing = 0.0
+label_smoothing = 0.05
 
 [checkpointing]
 experiments_dir = "/home/ubuntu/frame-uswest1/frame_data/experiments"  # Base directory for experiments
@@ -83,6 +89,10 @@ save_best = true  # Save best validation loss
 
 [logging]
 log_every_steps = 25
-n_recon_compare = 25  # More frequent reconstruction comparisons
+
+recon_compare_every_epochs = 1  # Log reconstruction comparison every N epochs (0=disabled)
 n_analyze_latent = 250  # Analyze latent space every N steps (0=disabled)
+# recon_compare_every_epochs = 1  # Log reconstruction comparison every N epochs (0=disabled)
+# n_analyze_latent = 50  # Analyze latent space every N steps (0=disabled)
+
 max_latent_analysis_samples = 32  # Max samples for latent histograms

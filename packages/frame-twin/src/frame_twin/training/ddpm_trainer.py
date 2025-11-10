@@ -30,28 +30,39 @@ class DDPMTrainer(BaseTrainer):
         vae_checkpoint = torch.load(vae_checkpoint_path, map_location='cpu')
         vae_config = vae_checkpoint['config']['model']
         
-        # Detect model type and instantiate accordingly
+        # Detect model type and instantiate accordingly, supporting both channel_schedule
+        # and legacy base_channels/levels stored in checkpoints
         model_type = vae_config.get('type', 'vae')
-        
+
+        channel_schedule = vae_config.get('channel_schedule')
+        base_channels = vae_config.get('base_channels')
+        levels = vae_config.get('levels')
+        input_channels = vae_config['input_channels']
+        latent_channels = vae_config['latent_channels']
+        logvar_mode = vae_config.get('logvar_mode', 'learned')
+        fixed_logvar_value = vae_config.get('fixed_logvar_value', 0.0)
+
         if model_type == 'unet_vae':
             vae = UNetVAE(
-                input_channels=vae_config['input_channels'],
-                latent_channels=vae_config['latent_channels'],
-                base_channels=vae_config['base_channels'],
-                levels=vae_config['levels'],
+                input_channels=input_channels,
+                latent_channels=latent_channels,
+                channel_schedule=channel_schedule,
+                base_channels=base_channels,
+                levels=levels,
                 norm_groups=vae_config.get('norm_groups', 8),
                 skip_dropout_prob=vae_config.get('skip_dropout_prob', 0.0),
-                logvar_mode=vae_config.get('logvar_mode', 'learned'),
-                fixed_logvar_value=vae_config.get('fixed_logvar_value', 0.0)
+                logvar_mode=logvar_mode,
+                fixed_logvar_value=fixed_logvar_value
             )
         else:  # 'vae'
             vae = VAE(
-                input_channels=vae_config['input_channels'],
-                latent_channels=vae_config['latent_channels'],
-                base_channels=vae_config['base_channels'],
-                levels=vae_config['levels'],
-                logvar_mode=vae_config.get('logvar_mode', 'learned'),
-                fixed_logvar_value=vae_config.get('fixed_logvar_value', 0.0)
+                input_channels=input_channels,
+                latent_channels=latent_channels,
+                channel_schedule=channel_schedule,
+                base_channels=base_channels,
+                levels=levels,
+                logvar_mode=logvar_mode,
+                fixed_logvar_value=fixed_logvar_value
             )
         
         vae.load_state_dict(vae_checkpoint['model_state_dict'])
@@ -64,6 +75,14 @@ class DDPMTrainer(BaseTrainer):
         # Create conditioning strategy
         conditioning_strategy = self._create_conditioning_strategy(config)
         
+        # Infer DDPM latent channels from VAE if not provided
+        if getattr(config.model, 'latent_channels', None) in (None, 0):
+            try:
+                config.model.latent_channels = int(vae_config.get('latent_channels'))
+            except Exception:
+                # Fallback: use VAE instance attribute
+                config.model.latent_channels = int(getattr(vae, 'latent_channels', 32))
+
         # Create DDPM model
         ddpm = DDPM(
             latent_channels=config.model.latent_channels,
@@ -307,23 +326,27 @@ class DDPMTrainer(BaseTrainer):
             )
             
             # Decode to voxel space
-            voxels = self.vae.decode(latents)
+            # Handle both VAE and UNetVAE decode signatures
+            if isinstance(self.vae, UNetVAE):
+                voxels = self.vae.decode(latents, skips=None)
+            else:
+                voxels = self.vae.decode(latents)
         
         return voxels
     
     def validate_epoch(self) -> Dict[str, float]:
-        """Validate for one epoch with sample generation."""
+        """Validate for one epoch.
+        
+        Note: Sample generation now happens only during image logging
+        to avoid duplicate expensive DDPM sampling. Sample statistics
+        are computed and logged during _log_reconstruction_images.
+        """
         # Call base class validation (handles step-based logging)
         epoch_metrics = super().validate_epoch()
         
-        # Add DDPM-specific validation metrics
-        if epoch_metrics['num_batches'] > 0:
-            try:
-                val_samples = self.generate_samples(4)  # Generate 4 samples
-                epoch_metrics['sample_mean'] = val_samples.mean().item()
-                epoch_metrics['sample_std'] = val_samples.std().item()
-            except Exception as e:
-                print(f"Warning: Could not generate validation samples: {e}")
+        # Sample statistics will be computed during image logging
+        # (see _log_reconstruction_images which is called by base trainer)
+        # This avoids doing 1000-step sampling twice per epoch
         
         return epoch_metrics
     
@@ -360,7 +383,7 @@ class DDPMTrainer(BaseTrainer):
         if parameters is not None and len(parameters) > 0:
             conditioning_tensor = self.conditioning_strategy.encode_parameters(
                 parameters[0], self.device
-            ).unsqueeze(0)  # Add batch dimension
+            )  # Already shaped (B, dim); for single sample returns (1, dim)
         
         # Set models to eval mode
         self.model.eval()
@@ -372,23 +395,44 @@ class DDPMTrainer(BaseTrainer):
             real_latent = self.vae.encode(real_voxel)
             
             # 2. Generate sample from DDPM in latent space with CFG
-            latent_shape = (n_samples, self.model.latent_channels, 16, 16, 16)
+            #    Match the latent spatial size to the encoded sample (avoids shape mismatches)
+            latent_size = int(real_latent.shape[2])  # cubic latent
+            latent_shape = (n_samples, self.model.latent_channels, latent_size, latent_size, latent_size)
             cfg_scale = getattr(self.config.model, 'cfg_scale', 1.0)
-            generated_latent = self.model.p_sample_loop(
-                latent_shape, 
-                conditioning_tensor,
-                cfg_scale=cfg_scale,
-                show_progress=False
-            )
+            
+            # Suppress MPS convolution warnings during sampling (known PyTorch limitation)
+            import warnings
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message=".*convolution_overrideable.*")
+                generated_latent = self.model.p_sample_loop(
+                    latent_shape, 
+                    conditioning_tensor,
+                    cfg_scale=cfg_scale,
+                    show_progress=False
+                )
             
             # 3. Decode both to voxel space
-            reconstructed_voxel = self.vae.decode(real_latent, skips=None)
-            generated_voxel = self.vae.decode(generated_latent, skips=None)
+            # Handle both VAE and UNetVAE decode signatures
+            # UNetVAE.decode() accepts skips parameter, VAE.decode() does not
+            if isinstance(self.vae, UNetVAE):
+                reconstructed_voxel = self.vae.decode(real_latent, skips=None)
+                generated_voxel = self.vae.decode(generated_latent, skips=None)
+            else:
+                reconstructed_voxel = self.vae.decode(real_latent)
+                generated_voxel = self.vae.decode(generated_latent)
+            
+            # Compute sample statistics for metrics (before moving to CPU)
+            sample_mean = generated_voxel.mean().item()
+            sample_std = generated_voxel.std().item()
         
         # Set models back to train mode
         self.model.train()
         if not self.config.model.freeze_vae:
             self.vae.train()
+        
+        # Log sample statistics as scalars
+        self.writer.add_scalar('ddpm/sample_mean', sample_mean, step)
+        self.writer.add_scalar('ddpm/sample_std', sample_std, step)
         
         # Move to CPU and extract single samples
         real_vox = real_voxel[0].cpu()        # (C, D, H, W)
@@ -452,6 +496,14 @@ class DDPMTrainer(BaseTrainer):
             step, 
             dataformats='CHW'
         )
+        
+        # Clean up to save memory
+        del generated_voxel, reconstructed_voxel, real_voxel
+        del generated_latent, real_latent
+        if self.device.type == 'cuda':
+            torch.cuda.empty_cache()
+        elif self.device.type == 'mps':
+            torch.mps.empty_cache()
     
     @staticmethod
     def _resolve_checkpoint_path(checkpoint_ref: str) -> Path:

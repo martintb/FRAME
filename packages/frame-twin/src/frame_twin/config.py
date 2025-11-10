@@ -214,7 +214,7 @@ class DDPMModelConfig(BaseModel):
     freeze_vae: bool = True
     
     # DDPM-specific parameters
-    latent_channels: int = Field(gt=0)
+    latent_channels: Optional[int] = Field(None, gt=0, description="Latent channels (inferred from VAE if not provided)")
     timesteps: int = Field(gt=0)
     beta_schedule: Literal["linear", "cosine"] = "linear"
     unet_channels: List[int]
@@ -226,6 +226,14 @@ class DDPMModelConfig(BaseModel):
     
     # Conditioning configuration
     conditioning: DDPMConditioningConfig
+    
+    @validator('latent_channels', always=True)
+    def validate_latent_channels(cls, v, values):
+        """Validate that latent_channels can be inferred if not provided."""
+        # Note: This validator runs before VAE is loaded, so we can't actually check here.
+        # The actual inference happens in DDPMTrainer.__init__
+        # This validator just ensures the field is properly typed.
+        return v
 
 
 class TrainingConfig(BaseModel):
@@ -306,7 +314,7 @@ class LoggingConfig(BaseModel):
     """Logging configuration."""
     log_every_steps: int = Field(gt=0)
     tensorboard_dir: Optional[str] = None  # Will be set to experiment's log directory
-    n_recon_compare: Optional[int] = Field(0, ge=0)  # Log reconstruction comparison every N steps
+    recon_compare_every_epochs: Optional[int] = Field(0, ge=0)  # Log reconstruction comparison every N epochs (0=disabled)
     n_analyze_latent: Optional[int] = Field(0, ge=0)  # Analyze latent space every N steps (0=disabled)
     max_latent_analysis_samples: int = Field(128, gt=0)  # Max samples for latent histograms
 

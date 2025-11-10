@@ -28,6 +28,10 @@ class ConditioningStrategy(ABC):
         self,
         parameters: Dict[str, Any],
         device: torch.device
-    ) -> torch.Tensor:
-        """Encode parameter dictionary to conditioning tensor."""
+    ) -> Optional[torch.Tensor]:
+        """Encode parameter dictionary to conditioning tensor.
+        
+        Returns None if no conditioning is available (e.g., empty parameter list
+        with conditioning_dim=0).
+        """
         pass

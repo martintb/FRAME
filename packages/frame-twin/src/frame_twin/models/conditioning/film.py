@@ -44,20 +44,26 @@ class FiLMConditioning(nn.Module, ConditioningStrategy):
         for param_name in self.parameter_names:
             self.param_embeddings[param_name] = nn.Linear(1, param_embedding_dim)
         
-        # Mask token embedding
-        self.mask_token = nn.Parameter(torch.randn(param_embedding_dim))
+        # Mask token embedding (initialized to mask_token_value)
+        self.mask_token = nn.Parameter(torch.full((param_embedding_dim,), mask_token_value))
         
         # Projection to conditioning dimension
         total_embedding_dim = len(self.parameter_names) * param_embedding_dim
-        self.projection = nn.Sequential(
-            nn.Linear(total_embedding_dim, hidden_dim),
-            nn.SiLU(),
-            nn.Linear(hidden_dim, param_embedding_dim)
-        )
+        if total_embedding_dim == 0:
+            # No parameters - use Identity and return 0 conditioning dim
+            self.projection = nn.Identity()
+            self._conditioning_dim = 0
+        else:
+            self.projection = nn.Sequential(
+                nn.Linear(total_embedding_dim, hidden_dim),
+                nn.SiLU(),
+                nn.Linear(hidden_dim, param_embedding_dim)
+            )
+            self._conditioning_dim = param_embedding_dim
     
     def get_conditioning_dim(self) -> int:
         """Get the conditioning dimension."""
-        return self.param_embedding_dim
+        return self._conditioning_dim
     
     def encode_parameters(
         self,
@@ -104,7 +110,9 @@ class FiLMConditioning(nn.Module, ConditioningStrategy):
             conditioning = torch.cat(embeddings, dim=-1)
             conditioning = self.projection(conditioning)
         else:
-            # No parameters, use zero conditioning
+            # No parameters - return None if conditioning_dim==0, otherwise zero tensor
+            if self._conditioning_dim == 0:
+                return None
             conditioning = torch.zeros(batch_size, self.param_embedding_dim, device=device)
         
         return conditioning
@@ -130,6 +138,18 @@ class FiLMConditioning(nn.Module, ConditioningStrategy):
         
         This is used by residual blocks to apply FiLM modulation.
         """
+        if self._conditioning_dim == 0:
+            # No conditioning - return a module that outputs zeros (scale=0, shift=0)
+            # This should not normally be called since conditioning_dim==0 leads to None being passed
+            class ZeroFilmLayer(nn.Module):
+                def __init__(self, dim):
+                    super().__init__()
+                    self.dim = dim
+                def forward(self, x):
+                    return torch.zeros(x.shape[0], self.dim * 2, device=x.device, dtype=x.dtype)
+            
+            return ZeroFilmLayer(feature_dim)
+        
         return nn.Sequential(
             nn.Linear(self.param_embedding_dim, self.hidden_dim),
             nn.SiLU(),

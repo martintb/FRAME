@@ -70,6 +70,6 @@ save_best = true
 
 [logging]
 log_every_steps = 25
-n_recon_compare = 25
+recon_compare_every_epochs = 1  # Log reconstruction comparison every N epochs (0=disabled)
 n_analyze_latent = 250
 max_latent_analysis_samples = 32

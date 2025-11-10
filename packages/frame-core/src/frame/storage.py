@@ -137,7 +137,8 @@ class VoxelLibrary:
         
         # Zarr fancy indexing loads only requested chunks
         batch_data = self.zarr_array[indices]
-        return torch.from_numpy(batch_data.copy())
+        # torch.from_numpy creates a view, no need for .copy() unless we need to modify the data
+        return torch.from_numpy(batch_data)
     
     def filter(self, query: str) -> 'FilteredVoxelLibrary':
         """Filter library based on parameter query.

@@ -42,7 +42,7 @@ class Experiment:
         with open(manifest_path, "r") as f:
             data = json.load(f)
         
-        return cls(
+        exp = cls(
             uuid=data["uuid"],
             name=data["name"],
             tags=data.get("tags", []),
@@ -56,10 +56,18 @@ class Experiment:
             dependencies=data.get("dependencies", {}),
             path=manifest_path.parent
         )
+        
+        # Load continued_to if present
+        if "continued_to" in data:
+            exp.continued_to = data["continued_to"]
+        else:
+            exp.continued_to = []
+        
+        return exp
     
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
-        return {
+        data = {
             "uuid": self.uuid,
             "name": self.name,
             "tags": self.tags,
@@ -72,6 +80,12 @@ class Experiment:
             "best_checkpoint": self.best_checkpoint,
             "dependencies": self.dependencies,
         }
+        
+        # Include continued_to if it exists (not in __init__ but added dynamically)
+        if hasattr(self, "continued_to") and self.continued_to:
+            data["continued_to"] = self.continued_to
+        
+        return data
     
     def register_checkpoint(
         self,
@@ -172,6 +186,25 @@ class Experiment:
         write_protect(dest)
         
         return dest
+    
+    def add_continuation_reference(self, continued_experiment_uuid: str, checkpoint_uuid: str):
+        """Record that this experiment was continued in another experiment.
+        
+        Args:
+            continued_experiment_uuid: UUID of the new experiment
+            checkpoint_uuid: UUID of the checkpoint that was used for continuation
+        """
+        if not hasattr(self, "continued_to"):
+            self.continued_to = []
+        
+        continuation_record = {
+            "experiment_uuid": continued_experiment_uuid,
+            "checkpoint_uuid": checkpoint_uuid,
+            "timestamp": timestamp_iso(),
+        }
+        
+        self.continued_to.append(continuation_record)
+        self._update_manifest()
     
     def _update_manifest(self):
         """Update manifest file for this experiment."""

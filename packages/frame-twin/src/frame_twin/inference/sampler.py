@@ -33,6 +33,12 @@ class Sampler:
         self.conditioning_strategy = conditioning_strategy
         self.device = device
         
+        # Store VAE properties for latent shape inference
+        self.vae_spatial_latent = getattr(vae, 'spatial_latent', True)
+        self.vae_latent_spatial_size = getattr(vae, 'latent_spatial_size', None)
+        self.vae_channel_schedule = getattr(vae, 'channel_schedule', None)
+        self.vae_levels = getattr(vae, 'levels', None)
+        
         # Set models to eval mode
         self.vae.eval()
         self.ddpm.eval()
@@ -55,14 +61,29 @@ class Sampler:
         # Detect model type (default to 'vae' for backward compatibility)
         model_type = vae_config.get('type', 'vae')
         
+        # Handle backward compatibility: support both channel_schedule and base_channels/levels
+        channel_schedule = vae_config.get('channel_schedule')
+        if channel_schedule is None:
+            # Fall back to legacy base_channels/levels
+            base_channels = vae_config.get('base_channels')
+            levels = vae_config.get('levels')
+            if base_channels is not None and levels is not None:
+                channel_schedule = [base_channels * (2 ** i) for i in range(levels)]
+            else:
+                raise ValueError(
+                    "VAE config must have either 'channel_schedule' or both 'base_channels' and 'levels'"
+                )
+        
+        # Get spatial_latent parameter (default to True for backward compatibility)
+        spatial_latent = vae_config.get('spatial_latent', True)
+        
         # Load the appropriate VAE model
         if model_type == 'unet_vae':
             print(f"Loading UNetVAE model from {vae_path}")
             vae = UNetVAE(
                 input_channels=vae_config['input_channels'],
                 latent_channels=vae_config['latent_channels'],
-                base_channels=vae_config['base_channels'],
-                levels=vae_config['levels'],
+                channel_schedule=channel_schedule,
                 norm_groups=vae_config.get('norm_groups', 8),
                 skip_dropout_prob=vae_config.get('skip_dropout_prob', 0.0),
                 logvar_mode=vae_config.get('logvar_mode', 'learned'),
@@ -73,12 +94,28 @@ class Sampler:
             vae = VAE(
                 input_channels=vae_config['input_channels'],
                 latent_channels=vae_config['latent_channels'],
-                base_channels=vae_config['base_channels'],
-                levels=vae_config['levels'],
+                channel_schedule=channel_schedule,
+                spatial_latent=spatial_latent,
                 logvar_mode=vae_config.get('logvar_mode', 'learned'),
                 fixed_logvar_value=vae_config.get('fixed_logvar_value', 0.0)
             )
         vae.load_state_dict(vae_checkpoint['model_state_dict'])
+        
+        # Store VAE properties for latent shape inference
+        vae_spatial_latent = spatial_latent
+        vae_latent_spatial_size = getattr(vae, 'latent_spatial_size', None)
+        vae_channel_schedule = channel_schedule
+        vae_levels = len(channel_schedule) if channel_schedule else None
+        
+        # If latent_spatial_size is not set, try to infer from checkpoint config
+        if vae_spatial_latent and vae_latent_spatial_size is None:
+            data_config = vae_checkpoint.get('config', {}).get('data', {})
+            crop_size = data_config.get('random_crop_size')
+            if crop_size is not None and vae_levels is not None:
+                vae_latent_spatial_size = crop_size // (2 ** vae_levels)
+            elif vae_levels is not None:
+                # Fallback: assume 128^3 input
+                vae_latent_spatial_size = 128 // (2 ** vae_levels)
         
         # Load DDPM
         ddpm_checkpoint = torch.load(ddpm_path, map_location='cpu')
@@ -97,12 +134,20 @@ class Sampler:
         )
         ddpm.load_state_dict(ddpm_checkpoint['model_state_dict'])
         
-        return cls(
+        sampler = cls(
             vae=vae,
             ddpm=ddpm,
             conditioning_strategy=ddpm_config['conditioning_strategy'],
             device=device
         )
+        
+        # Store inferred values
+        sampler.vae_spatial_latent = vae_spatial_latent
+        sampler.vae_latent_spatial_size = vae_latent_spatial_size
+        sampler.vae_channel_schedule = vae_channel_schedule
+        sampler.vae_levels = vae_levels
+        
+        return sampler
     
     @staticmethod
     def _create_conditioning_strategy_from_config(ddpm_config: Dict[str, Any]):
@@ -183,13 +228,40 @@ class Sampler:
                 conditioning_tensor = self.ddpm.conditioning_strategy.encode_parameters(
                     conditioning, self.device
                 )
-                # Expand to batch size
-                conditioning_tensor = conditioning_tensor.expand(num_samples, -1)
+                if conditioning_tensor is not None:
+                    # Expand to batch size
+                    conditioning_tensor = conditioning_tensor.expand(num_samples, -1)
+                else:
+                    # No conditioning available (e.g., empty parameter list with conditioning_dim=0)
+                    conditioning_tensor = None
             else:
                 conditioning_tensor = None
             
             # Sample from DDPM
-            latent_shape = (num_samples, self.ddpm.latent_channels, 16, 16, 16)
+            # Infer latent shape from VAE
+            if self.vae_spatial_latent:
+                # Spatial latents: infer size from stored values
+                latent_spatial_size = self.vae_latent_spatial_size
+                if latent_spatial_size is None:
+                    # Fallback: try to compute from levels
+                    if self.vae_levels is not None:
+                        latent_spatial_size = 128 // (2 ** self.vae_levels)
+                    else:
+                        raise ValueError(
+                            "Cannot determine latent spatial size. "
+                            "VAE should have latent_spatial_size set or levels/channel_schedule available."
+                        )
+                
+                latent_shape = (
+                    num_samples, 
+                    self.ddpm.latent_channels, 
+                    latent_spatial_size, 
+                    latent_spatial_size, 
+                    latent_spatial_size
+                )
+            else:
+                # Non-spatial latents: shape is (B, latent_channels)
+                latent_shape = (num_samples, self.ddpm.latent_channels)
             
             if ddpm_steps is not None and ddpm_steps != self.ddpm.timesteps:
                 # Use custom sampling steps

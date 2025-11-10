@@ -239,6 +239,13 @@ def handle_experiment_commands(args):
             print("\n  Dependencies:")
             for key, value in experiment.dependencies.items():
                 print(f"    {key}: {value}")
+        
+        if hasattr(experiment, "continued_to") and experiment.continued_to:
+            print("\n  Continued to:")
+            for continuation in experiment.continued_to:
+                print(f"    Experiment: {continuation['experiment_uuid']}")
+                print(f"      From checkpoint: {continuation['checkpoint_uuid']}")
+                print(f"      Timestamp: {continuation['timestamp']}")
     
     elif args.experiment_command == "tag":
         experiment = exp_mgr.get_experiment(args.uuid)

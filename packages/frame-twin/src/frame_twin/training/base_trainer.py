@@ -204,16 +204,6 @@ class BaseTrainer:
             if self.global_step % self.logging_config.log_every_steps == 0:
                 self._log_metrics(metrics, prefix='train', step=self.global_step)
 
-            # Periodic reconstruction comparison images
-            if getattr(self.logging_config, 'n_recon_compare', 0):
-                n_rc = self.logging_config.n_recon_compare or 0
-                if n_rc > 0 and (self.global_step % n_rc == 0):
-                    try:
-                        self._log_reconstruction_images(batch, metrics, step=self.global_step)
-                    except Exception:
-                        # Avoid crashing training due to visualization
-                        pass
-            
             # Periodic latent space analysis (VAE only)
             if getattr(self.logging_config, 'n_analyze_latent', 0):
                 n_al = self.logging_config.n_analyze_latent or 0
@@ -252,9 +242,12 @@ class BaseTrainer:
             'val_loss': 0.0,
             'num_batches': 0
         }
+        
+        # Store first batch for reconstruction logging
+        sample_batch_for_logging = None
 
         with torch.no_grad():
-            for batch in tqdm(self.val_loader, desc="Validation", leave=False):
+            for batch_idx, batch in enumerate(tqdm(self.val_loader, desc="Validation", leave=False)):
                 # Check for interruption at the start of each batch
                 if self.interrupted or self._check_stop_signal():
                     # Average metrics computed so far
@@ -264,6 +257,10 @@ class BaseTrainer:
 
                 # Move batch to device
                 batch = self._move_batch_to_device(batch)
+                
+                # Store first batch for epoch-based reconstruction logging
+                if batch_idx == 0:
+                    sample_batch_for_logging = batch
 
                 # Forward pass
                 compute_result = self._compute_loss(batch)
@@ -279,16 +276,6 @@ class BaseTrainer:
                 epoch_metrics['val_loss'] += loss.item()
                 epoch_metrics['num_batches'] += 1
 
-                # Periodic reconstruction comparison images (step-based)
-                if getattr(self.logging_config, 'n_recon_compare', 0):
-                    n_rc = self.logging_config.n_recon_compare or 0
-                    if n_rc > 0 and (self.global_step % n_rc == 0):
-                        try:
-                            self._log_reconstruction_images(batch, metrics, step=self.global_step)
-                        except Exception:
-                            # Avoid crashing training due to visualization
-                            pass
-                
                 # Periodic latent space analysis (VAE only)
                 if getattr(self.logging_config, 'n_analyze_latent', 0):
                     n_al = self.logging_config.n_analyze_latent or 0
@@ -310,6 +297,9 @@ class BaseTrainer:
 
         # Average metrics
         epoch_metrics['val_loss'] /= epoch_metrics['num_batches']
+        
+        # Store sample batch for epoch-based reconstruction logging
+        self._last_val_batch = sample_batch_for_logging
 
         return epoch_metrics
     
@@ -356,6 +346,24 @@ class BaseTrainer:
                 
                 # Log epoch metrics
                 self._log_epoch_metrics(train_metrics, val_metrics)
+                
+                # Epoch-based reconstruction comparison logging
+                recon_compare_every_epochs = getattr(self.logging_config, 'recon_compare_every_epochs', 0) or 0
+                if recon_compare_every_epochs > 0 and (self.current_epoch % recon_compare_every_epochs == 0):
+                    if hasattr(self, '_last_val_batch') and self._last_val_batch is not None:
+                        try:
+                            # Use epoch number as step for epoch-based logging
+                            self._log_reconstruction_images(
+                                self._last_val_batch, 
+                                val_metrics, 
+                                step=self.current_epoch
+                            )
+                            # Flush writer to ensure images are written
+                            if self.writer is not None:
+                                self.writer.flush()
+                        except Exception as e:
+                            # Avoid crashing training due to visualization
+                            print(f"Warning: Reconstruction image logging failed: {e}")
                 
                 # Checkpointing
                 is_best = val_metrics['val_loss'] < self.best_val_loss

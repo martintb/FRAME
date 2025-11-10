@@ -81,6 +81,6 @@ save_best = true  # Save best validation loss
 
 [logging]
 log_every_steps = 50
-n_recon_compare = 100  # Log reconstruction comparison every N steps
+recon_compare_every_epochs = 1  # Log reconstruction comparison every N epochs (0=disabled)
 n_analyze_latent = 200  # Analyze latent space every N steps (0=disabled)
 max_latent_analysis_samples = 128  # Max samples for latent histograms

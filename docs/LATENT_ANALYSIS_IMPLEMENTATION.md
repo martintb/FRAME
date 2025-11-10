@@ -113,7 +113,7 @@ Updated example configuration files to include the new parameters:
 ```toml
 [logging]
 log_every_steps = 25
-n_recon_compare = 25
+recon_compare_every_epochs = 1  # Log reconstruction comparison every N epochs (0=disabled)
 n_analyze_latent = 200  # Analyze latent space every N steps (0=disabled)
 max_latent_analysis_samples = 128  # Max samples for latent histograms
 ```
@@ -123,7 +123,7 @@ max_latent_analysis_samples = 128  # Max samples for latent histograms
 [logging]
 log_every_steps = 50
 tensorboard_dir = "./logs/vae"
-n_recon_compare = 0
+recon_compare_every_epochs = 0  # Log reconstruction comparison every N epochs (0=disabled)
 n_analyze_latent = 200  # Analyze latent space every N steps (0=disabled)
 max_latent_analysis_samples = 128  # Max samples for latent histograms
 ```

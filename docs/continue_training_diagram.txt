@@ -1,0 +1,90 @@
+Continue Training Feature - Visual Overview
+===========================================
+
+BEFORE CONTINUING:
+┌─────────────────────────────────────────┐
+│ Original Experiment (exp_abc123)        │
+│                                         │
+│  configs/                               │
+│    └── initial_config.toml              │
+│                                         │
+│  checkpoints/                           │
+│    ├── ckpt_xyz789 [BEST] ◄─── Resume  │
+│    ├── ckpt_def456          from this   │
+│    └── ckpt_ghi789                      │
+│                                         │
+│  manifest.json                          │
+│    - status: completed                  │
+│    - checkpoints: [...]                 │
+└─────────────────────────────────────────┘
+
+COMMAND:
+$ uv run frame twin continue exp_abc123 --config modified.toml
+
+AFTER CONTINUING:
+┌─────────────────────────────────────────┐     ┌─────────────────────────────────────────┐
+│ Original Experiment (exp_abc123)        │     │ New Experiment (exp_def456)            │
+│                                         │     │                                        │
+│  configs/                               │     │  configs/                              │
+│    ├── initial_config.toml              │     │    └── initial_config.toml             │
+│    └── continued_001_config.toml ◄──────┼─────┼────── (copy of modified.toml)        │
+│         (copy of modified.toml)         │     │                                        │
+│                                         │     │  checkpoints/                          │
+│  checkpoints/                           │     │    └── (new checkpoints here)          │
+│    ├── ckpt_xyz789 [BEST]               │     │                                        │
+│    ├── ckpt_def456                      │     │  logs/tensorboard/                     │
+│    └── ckpt_ghi789                      │     │    └── (new training logs)             │
+│                                         │     │                                        │
+│  manifest.json                          │     │  manifest.json                         │
+│    - status: completed                  │     │    - status: running                   │
+│    - continued_to: [                    │     │    - tags: [..., "continued"]          │
+│        {                                │     │    - dependencies:                     │
+│          experiment_uuid: exp_def456 ───┼─────┼──►     continued_from: exp_abc123     │
+│          checkpoint_uuid: ckpt_xyz789 ──┼─────┼──►     continued_from_checkpoint:     │
+│          timestamp: 2025-10-27...       │     │             ckpt_xyz789                │
+│        }                                │     │                                        │
+│      ]                                  │     │                                        │
+└─────────────────────────────────────────┘     └─────────────────────────────────────────┘
+           │                                                       ▲
+           │                                                       │
+           └───────── Bidirectional Tracking ─────────────────────┘
+
+VIEWING LINEAGE:
+
+$ uv run frame experiment show exp_abc123
+  Experiment: exp_abc123
+    Name: lnp_vae_1k
+    Status: completed
+    ...
+    Continued to:
+      Experiment: exp_def456
+        From checkpoint: ckpt_xyz789
+        Timestamp: 2025-10-27T10:30:00
+
+$ uv run frame experiment show exp_def456
+  Experiment: exp_def456
+    Name: lnp_vae_1k_continued
+    Status: running
+    ...
+    Dependencies:
+      continued_from: exp_abc123
+      continued_from_checkpoint: ckpt_xyz789
+
+KEY FEATURES:
+✓ Original experiment untouched (except manifest updated)
+✓ New experiment gets fresh directory
+✓ Both experiments record the relationship
+✓ Specific checkpoint used is tracked
+✓ All configs preserved for reproducibility
+✓ Clear terminal output shows all paths
+
+MULTIPLE CONTINUATIONS:
+┌─────────────────┐
+│  exp_original   │
+│                 │
+│  continued_to:  │
+│   ├─► exp_cont1 │  (from ckpt_001, modified learning rate)
+│   ├─► exp_cont2 │  (from ckpt_005, modified batch size)
+│   └─► exp_cont3 │  (from ckpt_005, modified loss weights)
+└─────────────────┘
+

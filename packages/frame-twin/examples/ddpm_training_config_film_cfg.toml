@@ -57,5 +57,5 @@ save_best = true
 [logging]
 log_every_steps = 10
 tensorboard_dir = "frame_data/experiments/ddpm_lnp_film_cfg/tensorboard"
-n_recon_compare = 4  # Number of reconstruction comparisons to log
+recon_compare_every_epochs = 1  # Log reconstruction comparison every N epochs (0=disabled)
 
