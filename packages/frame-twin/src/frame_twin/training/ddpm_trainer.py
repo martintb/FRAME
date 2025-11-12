@@ -143,8 +143,10 @@ class DDPMTrainer(BaseTrainer):
             # Set TensorBoard directory to experiment's logs
             logging_config.tensorboard_dir = str(experiment.path / "logs" / "tensorboard")
         elif config.logging.tensorboard_dir is None:
-            # Fallback to experiments_dir if no experiment provided
-            logging_config.tensorboard_dir = str(Path(config.checkpointing.experiments_dir) / "logs" / "tensorboard")
+            # Fallback to global config's experiments path if no experiment provided
+            from frame.config import get_config
+            frame_config = get_config()
+            logging_config.tensorboard_dir = str(frame_config.experiments_path / "logs" / "tensorboard")
         
         # Initialize base trainer
         super().__init__(

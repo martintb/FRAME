@@ -204,18 +204,6 @@ class BaseTrainer:
             if self.global_step % self.logging_config.log_every_steps == 0:
                 self._log_metrics(metrics, prefix='train', step=self.global_step)
 
-            # Periodic latent space analysis (VAE only)
-            if getattr(self.logging_config, 'n_analyze_latent', 0):
-                n_al = self.logging_config.n_analyze_latent or 0
-                if n_al > 0 and (self.global_step % n_al == 0) and latent_tuple is not None:
-                    if hasattr(self, '_log_latent_analysis'):
-                        try:
-                            self._log_latent_analysis(latent_tuple, step=self.global_step)
-                        except Exception as e:
-                            # Avoid crashing training due to latent analysis
-                            print(f"Warning: Latent analysis failed: {e}")
-                            pass
-
             # Update progress bar
             progress_bar.set_postfix({
                 'loss': f"{loss.item():.4f}",
@@ -245,6 +233,7 @@ class BaseTrainer:
         
         # Store first batch for reconstruction logging
         sample_batch_for_logging = None
+        sample_latent_tuple = None
 
         with torch.no_grad():
             for batch_idx, batch in enumerate(tqdm(self.val_loader, desc="Validation", leave=False)):
@@ -268,6 +257,9 @@ class BaseTrainer:
                 # Handle optional latent tuple return (VAE trainer returns 3 values, others return 2)
                 if len(compute_result) == 3:
                     loss, metrics, latent_tuple = compute_result
+                    # Store latent tuple from first batch for epoch-based analysis
+                    if batch_idx == 0:
+                        sample_latent_tuple = latent_tuple
                 else:
                     loss, metrics = compute_result
                     latent_tuple = None
@@ -275,18 +267,6 @@ class BaseTrainer:
                 # Update metrics
                 epoch_metrics['val_loss'] += loss.item()
                 epoch_metrics['num_batches'] += 1
-
-                # Periodic latent space analysis (VAE only)
-                if getattr(self.logging_config, 'n_analyze_latent', 0):
-                    n_al = self.logging_config.n_analyze_latent or 0
-                    if n_al > 0 and (self.global_step % n_al == 0) and latent_tuple is not None:
-                        if hasattr(self, '_log_latent_analysis'):
-                            try:
-                                self._log_latent_analysis(latent_tuple, step=self.global_step)
-                            except Exception as e:
-                                # Avoid crashing training due to latent analysis
-                                print(f"Warning: Latent analysis failed: {e}")
-                                pass
 
                 # Explicitly free memory
                 del loss, batch
@@ -300,6 +280,8 @@ class BaseTrainer:
         
         # Store sample batch for epoch-based reconstruction logging
         self._last_val_batch = sample_batch_for_logging
+        # Store latent tuple for epoch-based latent analysis
+        self._last_val_latent_tuple = sample_latent_tuple
 
         return epoch_metrics
     
@@ -364,6 +346,21 @@ class BaseTrainer:
                         except Exception as e:
                             # Avoid crashing training due to visualization
                             print(f"Warning: Reconstruction image logging failed: {e}")
+                
+                # Epoch-based latent space analysis (VAE only)
+                analyze_latent_every_epochs = getattr(self.logging_config, 'analyze_latent_every_epochs', 0) or 0
+                if analyze_latent_every_epochs > 0 and (self.current_epoch % analyze_latent_every_epochs == 0):
+                    if hasattr(self, '_last_val_latent_tuple') and self._last_val_latent_tuple is not None:
+                        if hasattr(self, '_log_latent_analysis'):
+                            try:
+                                # Use epoch number as step for epoch-based logging
+                                self._log_latent_analysis(self._last_val_latent_tuple, step=self.current_epoch)
+                                # Flush writer to ensure latent analysis is written
+                                if self.writer is not None:
+                                    self.writer.flush()
+                            except Exception as e:
+                                # Avoid crashing training due to latent analysis
+                                print(f"Warning: Latent analysis failed: {e}")
                 
                 # Checkpointing
                 is_best = val_metrics['val_loss'] < self.best_val_loss

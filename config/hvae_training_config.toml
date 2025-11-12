@@ -90,7 +90,6 @@ vampprior_mu_reg = 0.000001  # L2 regularization on VampPrior means
 vampprior_logvar_reg = 0.000001  # L2 regularization on VampPrior logvars
 
 [checkpointing]
-experiments_dir = "/Users/tbm/frame_data/experiments"  # Base directory for experiments
 save_every_epochs = 1
 save_every_minutes = 60  # Time-based checkpointing
 keep_last_n = 10
@@ -99,5 +98,5 @@ save_best = true  # Save best validation loss
 [logging]
 log_every_steps = 25
 recon_compare_every_epochs = 1  # Log reconstruction comparison every N epochs (0=disabled)
-n_analyze_latent = 250  # Analyze latent space every N steps (0=disabled)
+analyze_latent_every_epochs = 5  # Analyze latent space every N epochs (0=disabled)
 max_latent_analysis_samples = 32  # Max samples for latent histograms

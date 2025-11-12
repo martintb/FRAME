@@ -364,10 +364,6 @@ def train_vae(config_path: str):
     print(f"Created experiment: {experiment.uuid}")
     print(f"Experiment path: {experiment.path}")
     
-    # Update config with experiment-specific paths
-    config.checkpointing.experiments_dir = str(experiment.path.parent)
-    config.logging.log_every_steps = config.logging.log_every_steps
-    
     print("Creating data splits...")
     data_splits = create_data_splits(
         voxel_library=voxel_library,
@@ -426,10 +422,6 @@ def train_vae_with_checkpoint(config_path: str, experiment, checkpoint_path: str
     library_path, library_uuid = _resolve_library_path(config.data.library_uuid)
     print(f"Loading voxel library from {library_path}")
     voxel_library = VoxelLibrary(library_path)
-    
-    # Update config with experiment-specific paths
-    config.checkpointing.experiments_dir = str(experiment.path.parent)
-    config.logging.log_every_steps = config.logging.log_every_steps
     
     print("Creating data splits...")
     data_splits = create_data_splits(
@@ -515,9 +507,6 @@ def train_ddpm(config_path: str):
     print(f"Created experiment: {experiment.uuid}")
     print(f"Experiment path: {experiment.path}")
     
-    # Update config with experiment-specific paths
-    config.checkpointing.experiments_dir = str(experiment.path.parent)
-    
     print("Creating data splits...")
     data_splits = create_data_splits(
         voxel_library=voxel_library,
@@ -577,9 +566,6 @@ def train_ddpm_with_checkpoint(config_path: str, experiment, checkpoint_path: st
     library_path, library_uuid = _resolve_library_path(config.data.library_uuid)
     print(f"Loading voxel library from {library_path}")
     voxel_library = VoxelLibrary(library_path)
-    
-    # Update config with experiment-specific paths
-    config.checkpointing.experiments_dir = str(experiment.path.parent)
     
     print("Creating data splits...")
     data_splits = create_data_splits(
@@ -898,7 +884,6 @@ bg_weight = 0.0
 edge_weight = 0.1  # Edge-preserving loss weight
 
 [checkpointing]
-experiments_dir = "/Users/tbm/frame_data/experiments"  # Base directory for experiments
 save_every_epochs = 10
 save_every_minutes = 60  # Time-based checkpointing
 keep_last_n = 3
@@ -955,7 +940,6 @@ bg_weight = 0.0
 edge_weight = 0.1  # Edge-preserving loss (optional, helps with sharp boundaries)
 
 [checkpointing]
-experiments_dir = "/Users/tbm/frame_data/experiments"  # Base directory for experiments
 save_every_epochs = 1
 save_every_minutes = 60  # Time-based checkpointing
 keep_last_n = 5
@@ -1025,7 +1009,6 @@ scheduler = "cosine"
 loss_type = "mse"  # "mse" or "mae"
 
 [checkpointing]
-experiments_dir = "/Users/tbm/frame_data/experiments"  # Base directory for experiments
 save_every_epochs = 5
 save_every_minutes = 60
 keep_last_n = 3
@@ -1112,7 +1095,6 @@ vampprior_mu_reg = 0.0001  # L2 regularization on VampPrior means
 vampprior_logvar_reg = 0.0001  # L2 regularization on VampPrior logvars
 
 [checkpointing]
-experiments_dir = "/Users/tbm/frame_data/experiments"  # Base directory for experiments
 save_every_epochs = 10
 save_every_minutes = 60  # Time-based checkpointing
 keep_last_n = 3
@@ -1121,7 +1103,7 @@ save_best = true  # Save best validation loss
 [logging]
 log_every_steps = 50
 recon_compare_every_epochs = 1  # Log reconstruction comparison every N epochs (0=disabled)
-n_analyze_latent = 200  # Analyze latent space every N steps (0=disabled)
+analyze_latent_every_epochs = 5  # Analyze latent space every N epochs (0=disabled)
 max_latent_analysis_samples = 128  # Max samples for latent histograms
 """
     

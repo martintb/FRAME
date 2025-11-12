@@ -303,7 +303,6 @@ class LossConfig(BaseModel):
 
 class CheckpointingConfig(BaseModel):
     """Checkpointing configuration."""
-    experiments_dir: str = "/Users/tbm/frame_data/experiments"  # Base directory for experiments
     save_every_epochs: int = Field(gt=0)
     save_every_minutes: int = Field(gt=0)
     keep_last_n: int = Field(gt=0)
@@ -315,7 +314,7 @@ class LoggingConfig(BaseModel):
     log_every_steps: int = Field(gt=0)
     tensorboard_dir: Optional[str] = None  # Will be set to experiment's log directory
     recon_compare_every_epochs: Optional[int] = Field(0, ge=0)  # Log reconstruction comparison every N epochs (0=disabled)
-    n_analyze_latent: Optional[int] = Field(0, ge=0)  # Analyze latent space every N steps (0=disabled)
+    analyze_latent_every_epochs: Optional[int] = Field(0, ge=0)  # Analyze latent space every N epochs (0=disabled)
     max_latent_analysis_samples: int = Field(128, gt=0)  # Max samples for latent histograms
 
 

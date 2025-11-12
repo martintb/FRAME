@@ -15,8 +15,13 @@ class CheckpointManager:
     
     def __init__(self, config: CheckpointingConfig, output_dir: str = None, experiment=None):
         self.config = config
-        # Use provided output_dir if given, otherwise use experiments_dir from config
-        self.output_dir = Path(output_dir) if output_dir else Path(config.experiments_dir)
+        # Use provided output_dir if given, otherwise use global config's experiments path
+        if output_dir:
+            self.output_dir = Path(output_dir)
+        else:
+            from frame.config import get_config
+            frame_config = get_config()
+            self.output_dir = frame_config.experiments_path
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
         # Store experiment reference for frame-core integration

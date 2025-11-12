@@ -80,7 +80,6 @@ bleb_tail = 100.0
 water = 0.0001
 
 [checkpointing]
-experiments_dir = "/Users/tbm/frame_data/experiments"
 save_every_epochs = 1
 save_every_minutes = 60
 keep_last_n = 10
@@ -89,6 +88,6 @@ save_best = true
 [logging]
 log_every_steps = 25
 recon_compare_every_epochs = 1  # Log reconstruction comparison every N epochs (0=disabled)
-n_analyze_latent = 50
+analyze_latent_every_epochs = 5  # Analyze latent space every N epochs (0=disabled)
 max_latent_analysis_samples = 32
 

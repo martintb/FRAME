@@ -10,13 +10,13 @@
 # - AdamW optimizer for better generalization
 
 [metadata]
-name = "lnp_vae_10k"
+name = "lnp_vae"
 description = "VAE training"
 random_seed = 42
 
 [data]
-library_uuid = "lib_17db5bb2f223"  # lnp_10k_10ch_lhs library
-# library_uuid = "lib_3a9f32aad000"  # lnp_1k_10ch_lhs library
+# library_uuid = "lib_17db5bb2f223"  # lnp_10k_10ch_lhs library
+library_uuid = "lib_3a9f32aad000"  # lnp_1k_10ch_lhs library
 split_strategy = "random"  # or "stratified"
 train_ratio = 0.8
 val_ratio = 0.1
@@ -78,10 +78,9 @@ reconstruction_type = "fractional_ce"  # "mse" | "l1" | "bce_logits"
 mask_threshold = 0.0
 bg_weight = 0.0
 edge_weight = 0.0  # Small edge loss for sharper boundaries (was 0.0)
-label_smoothing = 0.05
+label_smoothing = 0.0
 
 [checkpointing]
-experiments_dir = "/home/ubuntu/frame-uswest1/frame_data/experiments"  # Base directory for experiments
 save_every_epochs = 1  # More frequent saving for short runs
 save_every_minutes = 60  # Time-based checkpointing
 keep_last_n = 10
@@ -91,8 +90,6 @@ save_best = true  # Save best validation loss
 log_every_steps = 25
 
 recon_compare_every_epochs = 1  # Log reconstruction comparison every N epochs (0=disabled)
-n_analyze_latent = 250  # Analyze latent space every N steps (0=disabled)
-# recon_compare_every_epochs = 1  # Log reconstruction comparison every N epochs (0=disabled)
-# n_analyze_latent = 50  # Analyze latent space every N steps (0=disabled)
+analyze_latent_every_epochs = 5  # Analyze latent space every N epochs (0=disabled)
 
 max_latent_analysis_samples = 32  # Max samples for latent histograms

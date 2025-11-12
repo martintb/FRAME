@@ -44,7 +44,6 @@ bg_weight = 0.0
 edge_weight = 0.1  # Edge-preserving loss (optional, helps with sharp boundaries)
 
 [checkpointing]
-experiments_dir = "/Users/tbm/frame_data/experiments"  # Base directory for experiments
 save_every_epochs = 1
 save_every_minutes = 60  # Time-based checkpointing
 keep_last_n = 5
