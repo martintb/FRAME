@@ -380,11 +380,15 @@ class DDPMTrainer(BaseTrainer):
         # Use only first sample for visualization
         n_samples = 1
         
-        # Encode conditioning from first sample if available
+        # Select sample from batch, cycling through based on step/epoch for visualization variety
+        batch_size = voxels.shape[0]
+        sample_idx = step % batch_size if batch_size > 0 else 0
+        
+        # Encode conditioning from selected sample if available
         conditioning_tensor = None
         if parameters is not None and len(parameters) > 0:
             conditioning_tensor = self.conditioning_strategy.encode_parameters(
-                parameters[0], self.device
+                parameters[sample_idx], self.device
             )  # Already shaped (B, dim); for single sample returns (1, dim)
         
         # Set models to eval mode
@@ -393,7 +397,7 @@ class DDPMTrainer(BaseTrainer):
         
         with torch.no_grad():
             # 1. Encode real voxel to latent space
-            real_voxel = voxels[0:1]  # Take first sample, keep batch dim
+            real_voxel = voxels[sample_idx:sample_idx+1]  # Take selected sample, keep batch dim
             real_latent = self.vae.encode(real_voxel)
             
             # 2. Generate sample from DDPM in latent space with CFG

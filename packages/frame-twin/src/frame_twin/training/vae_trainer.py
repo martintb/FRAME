@@ -492,7 +492,32 @@ class VAETrainer(BaseTrainer):
         # Determine model type by checking latent shape
         if len(latent_tuple) == 3:
             # VAE: log latents as before
-            self._log_latent_statistics(latent_tuple[0], latent_tuple[1], latent_tuple[2], "latent", step)
+            z, mu, logvar = latent_tuple
+            self._log_latent_statistics(z, mu, logvar, "latent", step)
+            
+            # Compute active units if enabled
+            if self.config.logging.compute_active_units:
+                # Prepare mu for active units computation (handle spatial vs non-spatial)
+                if mu.ndim == 5:
+                    mu_c = mu.mean(dim=(2, 3, 4))  # (B, C)
+                else:
+                    mu_c = mu  # (B, latent_dim)
+                # Subsample if needed
+                max_samples = self.config.logging.max_latent_analysis_samples
+                if mu_c.shape[0] > max_samples:
+                    indices = torch.randperm(mu_c.shape[0])[:max_samples]
+                    mu_c = mu_c[indices]
+                active_fraction = self._compute_active_units(mu_c, self.config.logging.active_units_threshold)
+                self.writer.add_scalar("latent/active_units_fraction", active_fraction, step)
+            
+            # Prior sample quality (only for standard VAE, not HVAE)
+            if self.config.logging.compute_prior_sample_quality:
+                self._compute_prior_sample_quality("latent", step)
+            
+            # Interpolation smoothness (only for standard VAE)
+            if self.config.logging.compute_interpolation_smoothness:
+                self._compute_interpolation_smoothness("latent", step)
+                
         elif len(latent_tuple) == 6:
             # Check if this is VP-HVAE (1D latents) or HVAE (spatial latents)
             z_first = latent_tuple[0]
@@ -501,10 +526,51 @@ class VAETrainer(BaseTrainer):
                 z1_q, z1_q_mean, z1_q_logvar, z2_q, z2_q_mean, z2_q_logvar = latent_tuple
                 self._log_vp_hvae_latent_statistics(z1_q, z1_q_mean, z1_q_logvar, "latent_z1", step)
                 self._log_vp_hvae_latent_statistics(z2_q, z2_q_mean, z2_q_logvar, "latent_z2", step)
+                
+                # Active units for VP-HVAE
+                if self.config.logging.compute_active_units:
+                    max_samples = self.config.logging.max_latent_analysis_samples
+                    mu1_c = z1_q_mean
+                    mu2_c = z2_q_mean
+                    if mu1_c.shape[0] > max_samples:
+                        indices = torch.randperm(mu1_c.shape[0])[:max_samples]
+                        mu1_c = mu1_c[indices]
+                        mu2_c = mu2_c[indices]
+                    active_fraction_z1 = self._compute_active_units(mu1_c, self.config.logging.active_units_threshold)
+                    active_fraction_z2 = self._compute_active_units(mu2_c, self.config.logging.active_units_threshold)
+                    self.writer.add_scalar("latent_z1/active_units_fraction", active_fraction_z1, step)
+                    self.writer.add_scalar("latent_z2/active_units_fraction", active_fraction_z2, step)
+                
+                # Prior sample quality for VP-HVAE
+                if self.config.logging.compute_prior_sample_quality:
+                    self._compute_prior_sample_quality("latent_z2", step)
             else:  # HVAE: spatial latents
                 z_top, mu_top, logvar_top, z_bottom, mu_bottom, logvar_bottom = latent_tuple
                 self._log_latent_statistics(z_top, mu_top, logvar_top, "latent_top", step)
                 self._log_latent_statistics(z_bottom, mu_bottom, logvar_bottom, "latent_bottom", step)
+                
+                # Active units for HVAE
+                if self.config.logging.compute_active_units:
+                    # Handle spatial latents
+                    if mu_top.ndim == 5:
+                        mu_top_c = mu_top.mean(dim=(2, 3, 4))
+                        mu_bottom_c = mu_bottom.mean(dim=(2, 3, 4))
+                    else:
+                        mu_top_c = mu_top
+                        mu_bottom_c = mu_bottom
+                    max_samples = self.config.logging.max_latent_analysis_samples
+                    if mu_top_c.shape[0] > max_samples:
+                        indices = torch.randperm(mu_top_c.shape[0])[:max_samples]
+                        mu_top_c = mu_top_c[indices]
+                        mu_bottom_c = mu_bottom_c[indices]
+                    active_fraction_top = self._compute_active_units(mu_top_c, self.config.logging.active_units_threshold)
+                    active_fraction_bottom = self._compute_active_units(mu_bottom_c, self.config.logging.active_units_threshold)
+                    self.writer.add_scalar("latent_top/active_units_fraction", active_fraction_top, step)
+                    self.writer.add_scalar("latent_bottom/active_units_fraction", active_fraction_bottom, step)
+                
+                # Prior sample quality only for top latent (not bottom)
+                if self.config.logging.compute_prior_sample_quality:
+                    self._compute_prior_sample_quality("latent_top", step)
         else:
             print(f"Warning: Unexpected latent_tuple length {len(latent_tuple)}")
 
@@ -541,26 +607,33 @@ class VAETrainer(BaseTrainer):
                 z_c = z_c[indices]
                 B = max_samples
 
-            # Log overall histograms
-            self.writer.add_histogram(f"{prefix}/mu_all", mu_c.detach().cpu().flatten(), step)
-            self.writer.add_histogram(f"{prefix}/std_all", std_c.detach().cpu().flatten(), step)
-            self.writer.add_histogram(f"{prefix}/z_all", z_c.detach().cpu().flatten(), step)
+            # Log histograms if enabled
+            if self.config.logging.log_latent_histograms:
+                # Log overall histograms
+                self.writer.add_histogram(f"{prefix}/mu_all", mu_c.detach().cpu().flatten(), step)
+                self.writer.add_histogram(f"{prefix}/std_all", std_c.detach().cpu().flatten(), step)
+                self.writer.add_histogram(f"{prefix}/z_all", z_c.detach().cpu().flatten(), step)
 
-            # Per-channel histograms (first 8 dimensions)
-            max_dims_to_log = min(C, 8)
-            for i in range(max_dims_to_log):
-                self.writer.add_histogram(f"{prefix}/mu_dim_{i}", mu_c[:, i].detach().cpu(), step)
-                self.writer.add_histogram(f"{prefix}/std_dim_{i}", std_c[:, i].detach().cpu(), step)
-                self.writer.add_histogram(f"{prefix}/z_dim_{i}", z_c[:, i].detach().cpu(), step)
+                # Per-channel histograms (first 8 dimensions)
+                max_dims_to_log = min(C, 8)
+                for i in range(max_dims_to_log):
+                    self.writer.add_histogram(f"{prefix}/mu_dim_{i}", mu_c[:, i].detach().cpu(), step)
+                    self.writer.add_histogram(f"{prefix}/std_dim_{i}", std_c[:, i].detach().cpu(), step)
+                    self.writer.add_histogram(f"{prefix}/z_dim_{i}", z_c[:, i].detach().cpu(), step)
 
-            # Per-dim KL divergence
-            kl_per_dim = 0.5 * (mu_c.pow(2) + std_c.pow(2) - 1.0 - (2 * std_c.log()))
-            self.writer.add_histogram(f"{prefix}/kl_per_dim", kl_per_dim.detach().cpu().flatten(), step)
+                # Per-dim KL divergence
+                kl_per_dim = 0.5 * (mu_c.pow(2) + std_c.pow(2) - 1.0 - (2 * std_c.log()))
+                self.writer.add_histogram(f"{prefix}/kl_per_dim", kl_per_dim.detach().cpu().flatten(), step)
+                
+                # Z norm distribution
+                z_norm = z_c.norm(dim=1)  # (B,)
+                self.writer.add_histogram(f"{prefix}/z_norm", z_norm.detach().cpu(), step)
+            else:
+                # Still compute KL for scalar logging even if histograms are disabled
+                kl_per_dim = 0.5 * (mu_c.pow(2) + std_c.pow(2) - 1.0 - (2 * std_c.log()))
+            
+            # Always log scalar metrics (not histograms)
             self.writer.add_scalar(f"{prefix}/kl_total_nats", kl_per_dim.sum(dim=1).mean().item(), step)
-
-            # Z norm distribution
-            z_norm = z_c.norm(dim=1)  # (B,)
-            self.writer.add_histogram(f"{prefix}/z_norm", z_norm.detach().cpu(), step)
 
             # Summary statistics
             self.writer.add_scalar(f"{prefix}/mu_mean", mu_c.mean().item(), step)
@@ -606,26 +679,33 @@ class VAETrainer(BaseTrainer):
 
             std = (0.5 * logvar).exp()
 
-            # Log overall histograms
-            self.writer.add_histogram(f"{prefix}/mu_all", mu.detach().cpu().flatten(), step)
-            self.writer.add_histogram(f"{prefix}/std_all", std.detach().cpu().flatten(), step)
-            self.writer.add_histogram(f"{prefix}/z_all", z.detach().cpu().flatten(), step)
+            # Log histograms if enabled
+            if self.config.logging.log_latent_histograms:
+                # Log overall histograms
+                self.writer.add_histogram(f"{prefix}/mu_all", mu.detach().cpu().flatten(), step)
+                self.writer.add_histogram(f"{prefix}/std_all", std.detach().cpu().flatten(), step)
+                self.writer.add_histogram(f"{prefix}/z_all", z.detach().cpu().flatten(), step)
 
-            # Per-dimension histograms (first 8 dimensions)
-            max_dims_to_log = min(D, 8)
-            for i in range(max_dims_to_log):
-                self.writer.add_histogram(f"{prefix}/mu_dim_{i}", mu[:, i].detach().cpu(), step)
-                self.writer.add_histogram(f"{prefix}/std_dim_{i}", std[:, i].detach().cpu(), step)
-                self.writer.add_histogram(f"{prefix}/z_dim_{i}", z[:, i].detach().cpu(), step)
+                # Per-dimension histograms (first 8 dimensions)
+                max_dims_to_log = min(D, 8)
+                for i in range(max_dims_to_log):
+                    self.writer.add_histogram(f"{prefix}/mu_dim_{i}", mu[:, i].detach().cpu(), step)
+                    self.writer.add_histogram(f"{prefix}/std_dim_{i}", std[:, i].detach().cpu(), step)
+                    self.writer.add_histogram(f"{prefix}/z_dim_{i}", z[:, i].detach().cpu(), step)
 
-            # Per-dim KL divergence KL(q(z) || N(0,1))
-            kl_per_dim = 0.5 * (mu.pow(2) + std.pow(2) - 1.0 - 2 * std.log())
-            self.writer.add_histogram(f"{prefix}/kl_per_dim", kl_per_dim.detach().cpu().flatten(), step)
+                # Per-dim KL divergence KL(q(z) || N(0,1))
+                kl_per_dim = 0.5 * (mu.pow(2) + std.pow(2) - 1.0 - 2 * std.log())
+                self.writer.add_histogram(f"{prefix}/kl_per_dim", kl_per_dim.detach().cpu().flatten(), step)
+                
+                # Z norm distribution
+                z_norm = z.norm(dim=1)  # (B,)
+                self.writer.add_histogram(f"{prefix}/z_norm", z_norm.detach().cpu(), step)
+            else:
+                # Still compute KL for scalar logging even if histograms are disabled
+                kl_per_dim = 0.5 * (mu.pow(2) + std.pow(2) - 1.0 - 2 * std.log())
+            
+            # Always log scalar metrics (not histograms)
             self.writer.add_scalar(f"{prefix}/kl_total_nats", kl_per_dim.sum(dim=1).mean().item(), step)
-
-            # Z norm distribution
-            z_norm = z.norm(dim=1)  # (B,)
-            self.writer.add_histogram(f"{prefix}/z_norm", z_norm.detach().cpu(), step)
 
             # Summary statistics
             self.writer.add_scalar(f"{prefix}/mu_mean", mu.mean().item(), step)
@@ -659,6 +739,224 @@ class VAETrainer(BaseTrainer):
                 explained_var = (S ** 2) / (S ** 2).sum()
                 for i in range(min(5, len(explained_var))):
                     self.writer.add_scalar(f"{prefix}/pca_var_pc{i+1}", explained_var[i].item(), step)
+
+    def _compute_active_units(self, mu_samples: torch.Tensor, threshold: float) -> float:
+        """Compute fraction of active latent dimensions.
+        
+        Args:
+            mu_samples: Latent means (B, latent_dim) or (B, C) after spatial averaging
+            threshold: Variance threshold for considering a dimension active
+            
+        Returns:
+            Fraction of dimensions with variance > threshold
+        """
+        with torch.no_grad():
+            # Compute variance across batch for each dimension
+            mu_var = torch.var(mu_samples, dim=0)  # (latent_dim,)
+            # Count dimensions with variance > threshold
+            active = (mu_var > threshold).sum().item()
+            # Return fraction of active dimensions
+            return active / mu_samples.shape[1] if mu_samples.shape[1] > 0 else 0.0
+
+    def _compute_prior_sample_quality(self, prefix: str, step: int):
+        """Compute quality of samples from prior by comparing to validation data.
+        
+        Args:
+            prefix: Prefix for TensorBoard tags
+            step: Current global step
+        """
+        if self.writer is None or self.val_loader is None:
+            return
+        
+        n_samples = self.config.logging.prior_sample_num_samples
+        
+        self.model.eval()
+        with torch.no_grad():
+            # Sample from prior N(0,1)
+            if self.is_hvae:
+                # HVAE: sample from top latent only for comparison
+                if hasattr(self.model, 'latent_spatial_size_top') and self.model.latent_spatial_size_top is not None:
+                    latent_size = self.model.latent_spatial_size_top
+                else:
+                    # Fallback: infer from first validation batch
+                    sample_batch = next(iter(self.val_loader))
+                    if isinstance(sample_batch, dict):
+                        sample_voxels = sample_batch['voxels'].to(self.device)
+                    else:
+                        sample_voxels = sample_batch.to(self.device)
+                    z_top, _ = self.model.encode(sample_voxels[:1])
+                    if isinstance(z_top, tuple):
+                        z_top = z_top[0]
+                    latent_size = z_top.shape[2] if z_top.ndim == 5 else None
+                
+                if latent_size is not None:
+                    z_samples = torch.randn(n_samples, self.model.latent_channels_top, latent_size, latent_size, latent_size, device=self.device)
+                    generated = self.model.decode(z_samples)
+                else:
+                    # Non-spatial: use latent_channels_top as dimension
+                    z_samples = torch.randn(n_samples, self.model.latent_channels_top, device=self.device)
+                    generated = self.model.decode(z_samples)
+            elif getattr(self, 'is_vp_hvae', False):
+                # VP-HVAE: sample z2 from VampPrior or standard prior, then sample z1
+                z2_samples = torch.randn(n_samples, self.model.z2_size, device=self.device)
+                # Sample z1 from conditional prior p(z1|z2)
+                z1_p_mean, z1_p_logvar = self.model.p_z1(z2_samples)
+                z1_samples = self.model.reparameterize(z1_p_mean, z1_p_logvar)
+                # Decode
+                generated, _ = self.model.decode(z1_samples, z2_samples, target_resolution=64)  # Default resolution
+            else:
+                # Standard VAE: sample from N(0,1)
+                if self.model.spatial_latent:
+                    # Spatial latents: need to infer spatial size
+                    if hasattr(self.model, 'latent_spatial_size') and self.model.latent_spatial_size is not None:
+                        latent_size = self.model.latent_spatial_size
+                    else:
+                        # Infer from first validation batch
+                        sample_batch = next(iter(self.val_loader))
+                        if isinstance(sample_batch, dict):
+                            sample_voxels = sample_batch['voxels'].to(self.device)
+                        else:
+                            sample_voxels = sample_batch.to(self.device)
+                        z_sample = self.model.encode(sample_voxels[:1])
+                        latent_size = z_sample.shape[2] if z_sample.ndim == 5 else 16  # Fallback
+                    z_samples = torch.randn(n_samples, self.model.latent_channels, latent_size, latent_size, latent_size, device=self.device)
+                else:
+                    # Non-spatial latents
+                    z_samples = torch.randn(n_samples, self.model.latent_channels, device=self.device)
+                generated = self.model.decode(z_samples)
+            
+            # Apply activation if needed (for models that output logits)
+            if hasattr(self.loss_fn, 'reconstruction_type'):
+                rtype = getattr(self.loss_fn, 'reconstruction_type', 'mse')
+                if rtype == 'bce_logits':
+                    generated = torch.sigmoid(generated)
+                elif rtype == 'fractional_ce':
+                    generated = torch.nn.functional.softmax(generated, dim=1)
+            
+            # Collect validation samples for comparison
+            val_samples = []
+            val_count = 0
+            for batch in self.val_loader:
+                if isinstance(batch, dict):
+                    voxels = batch['voxels'].to(self.device)
+                else:
+                    voxels = batch.to(self.device)
+                val_samples.append(voxels)
+                val_count += voxels.shape[0]
+                if val_count >= n_samples:
+                    break
+            
+            if len(val_samples) == 0:
+                return
+            
+            val_samples = torch.cat(val_samples, dim=0)[:n_samples]
+            
+            # Compare statistics
+            gen_mean = generated.mean().item()
+            real_mean = val_samples.mean().item()
+            
+            gen_std = generated.std().item()
+            real_std = val_samples.std().item()
+            
+            # Channel-wise comparison
+            gen_channel_means = generated.mean(dim=[0, 2, 3, 4])  # (C,)
+            real_channel_means = val_samples.mean(dim=[0, 2, 3, 4])  # (C,)
+            channel_divergence = (gen_channel_means - real_channel_means).abs().mean().item()
+            
+            # Log metrics
+            self.writer.add_scalar(f"{prefix}/prior_sample_mean_error", abs(gen_mean - real_mean), step)
+            self.writer.add_scalar(f"{prefix}/prior_sample_std_error", abs(gen_std - real_std), step)
+            self.writer.add_scalar(f"{prefix}/prior_sample_channel_divergence", channel_divergence, step)
+
+    def _compute_interpolation_smoothness(self, prefix: str, step: int):
+        """Compute smoothness of interpolations in latent space.
+        
+        Args:
+            prefix: Prefix for TensorBoard tags
+            step: Current global step
+        """
+        if self.writer is None or self.val_loader is None:
+            return
+        
+        n_pairs = self.config.logging.interpolation_num_pairs
+        n_steps = self.config.logging.interpolation_num_steps
+        
+        # Skip for HVAE (too complex with multiple latents)
+        if self.is_hvae or getattr(self, 'is_vp_hvae', False):
+            return
+        
+        self.model.eval()
+        with torch.no_grad():
+            # Collect structures from validation set
+            structures = []
+            for batch in self.val_loader:
+                if isinstance(batch, dict):
+                    voxels = batch['voxels'].to(self.device)
+                else:
+                    voxels = batch.to(self.device)
+                structures.append(voxels)
+                if len(structures) * voxels.shape[0] >= n_pairs * 2:
+                    break
+            
+            if len(structures) == 0:
+                return
+            
+            structures = torch.cat(structures, dim=0)[:n_pairs * 2]
+            
+            smoothness_scores = []
+            
+            for i in range(n_pairs):
+                x1 = structures[2 * i].unsqueeze(0)  # (1, C, D, H, W)
+                x2 = structures[2 * i + 1].unsqueeze(0)
+                
+                # Encode to latent means
+                # Handle both VAE (3 values) and UNetVAE (4 values with skips)
+                encoder_out1 = self.model.encoder(x1)
+                encoder_out2 = self.model.encoder(x2)
+                
+                if len(encoder_out1) == 4:
+                    # UNetVAE: (z, mu, logvar, skips)
+                    z1, mu1, logvar1, _ = encoder_out1
+                    z2, mu2, logvar2, _ = encoder_out2
+                else:
+                    # Standard VAE: (z, mu, logvar)
+                    z1, mu1, logvar1 = encoder_out1
+                    z2, mu2, logvar2 = encoder_out2
+                
+                # Use means for interpolation (more stable than samples)
+                # Interpolate in latent space
+                alphas = torch.linspace(0, 1, n_steps, device=self.device)
+                path_deltas = []
+                
+                prev_decoded = None
+                for alpha in alphas:
+                    z_interp = mu1 * (1 - alpha) + mu2 * alpha
+                    decoded = self.model.decode(z_interp)
+                    
+                    # Apply activation if needed
+                    if hasattr(self.loss_fn, 'reconstruction_type'):
+                        rtype = getattr(self.loss_fn, 'reconstruction_type', 'mse')
+                        if rtype == 'bce_logits':
+                            decoded = torch.sigmoid(decoded)
+                        elif rtype == 'fractional_ce':
+                            decoded = torch.nn.functional.softmax(decoded, dim=1)
+                    
+                    if prev_decoded is not None:
+                        # Measure change between consecutive points
+                        delta = (decoded - prev_decoded).abs().mean()
+                        path_deltas.append(delta)
+                    prev_decoded = decoded
+                
+                if len(path_deltas) > 0:
+                    # Smoothness = negative std of deltas (lower variance = smoother)
+                    path_deltas_tensor = torch.stack(path_deltas)
+                    smoothness = -path_deltas_tensor.std().item()
+                    smoothness_scores.append(smoothness)
+            
+            if len(smoothness_scores) > 0:
+                import numpy as np
+                self.writer.add_scalar(f"{prefix}/interpolation_smoothness_mean", np.mean(smoothness_scores), step)
+                self.writer.add_scalar(f"{prefix}/interpolation_smoothness_std", np.std(smoothness_scores), step)
 
     def train(self, start_epoch: int = 0) -> None:
         """Train the VAE model."""

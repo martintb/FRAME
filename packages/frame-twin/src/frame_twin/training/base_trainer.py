@@ -482,9 +482,12 @@ class BaseTrainer:
             x_recon = out[0] if isinstance(out, (tuple, list)) else out
         self.model.train()
 
-        # Select last item in batch for reproducibility
-        x = vox[-1]            # (C, D, H, W)
-        xr = x_recon[-1]       # (C, D, H, W)
+        # Select sample from batch, cycling through based on step/epoch for visualization variety
+        # This ensures different validation samples are shown across epochs instead of always the same one
+        batch_size = vox.shape[0]
+        idx = step % batch_size if batch_size > 0 else 0
+        x = vox[idx]            # (C, D, H, W)
+        xr = x_recon[idx]       # (C, D, H, W)
 
         # Map outputs for visualization based on reconstruction type
         if hasattr(self, 'loss_fn'):

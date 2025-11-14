@@ -316,6 +316,16 @@ class LoggingConfig(BaseModel):
     recon_compare_every_epochs: Optional[int] = Field(0, ge=0)  # Log reconstruction comparison every N epochs (0=disabled)
     analyze_latent_every_epochs: Optional[int] = Field(0, ge=0)  # Analyze latent space every N epochs (0=disabled)
     max_latent_analysis_samples: int = Field(128, gt=0)  # Max samples for latent histograms
+    
+    # Advanced latent metrics (optional)
+    log_latent_histograms: bool = Field(True, description="Enable/disable histogram logging for latent space")
+    compute_active_units: bool = Field(True, description="Enable/disable active units metric computation")
+    compute_prior_sample_quality: bool = Field(True, description="Enable/disable prior sampling quality metric")
+    compute_interpolation_smoothness: bool = Field(True, description="Enable/disable interpolation smoothness metric")
+    interpolation_num_pairs: int = Field(20, gt=0, description="Number of structure pairs for interpolation")
+    interpolation_num_steps: int = Field(10, gt=0, description="Number of steps per interpolation")
+    prior_sample_num_samples: int = Field(100, gt=0, description="Number of samples from prior for quality assessment")
+    active_units_threshold: float = Field(0.01, gt=0.0, description="Variance threshold for active units computation")
 
 
 class SamplingConfig(BaseModel):
