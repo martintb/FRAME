@@ -10,13 +10,15 @@
 # - AdamW optimizer for better generalization
 
 [metadata]
-name = "lnp_vae"
+name = "lnp_vae_1k_2ch"
 description = "VAE training"
 random_seed = 42
 
 [data]
 # library_uuid = "lib_17db5bb2f223"  # lnp_10k_10ch_lhs library
-library_uuid = "lib_3a9f32aad000"  # lnp_1k_10ch_lhs library
+#library_uuid = "lib_3a9f32aad000"  # lnp_1k_10ch_lhs library
+# library_uuid = "lib_ede0b11a4f77"  # lnp_1k_2ch_lhs library
+library_uuid = "lib_e2b3643a1cf1"  # lnp_10k_2ch_lhs library
 split_strategy = "random"  # or "stratified"
 train_ratio = 0.8
 val_ratio = 0.1
@@ -32,10 +34,10 @@ max_bg_crop_attempts = 32  # Retry random crops up to this many times
 
 [model]
 type = "vae"  # "vae" or "unet_vae"
-input_channels = 10  # Number of material channels
-latent_channels = 256 # Small latent space dimension
-#channel_schedule = [16,32,64,128,256]  # Channel sizes at each level (inferred levels = 2)
-channel_schedule = [32,64,128]  # Channel sizes at each level (
+#input_channels = 10  # Number of material channels
+input_channels = 2  # Number of material channels
+latent_channels = 128 # Small latent space dimension
+channel_schedule = [48,96]  # Channel sizes at each level (inferred levels = 2)
 # Alternatively, use legacy params: base_channels = 32, levels = 2
 norm_groups = 8  # Number of groups for GroupNorm (UNetVAE only)
 spatial_latent = true  # Use spatial latents (B, C, D, H, W) instead of flat vector (B, latent_channels)
@@ -45,7 +47,7 @@ spatial_latent = true  # Use spatial latents (B, C, D, H, W) instead of flat vec
 #   "learned": Full spatial logvar prediction (default, most flexible)
 #   "fixed": Constant logvar (fast, simple, good for compression)
 #   "scalar": Single learnable parameter for all positions (compromise)
-logvar_mode = "fixed"
+logvar_mode = "learned" ##XXX try next
 fixed_logvar_value = 0.0  # Only used when logvar_mode = "fixed" (0.0 means std=1.0)
 
 [training]
@@ -70,8 +72,8 @@ kl_delay_epochs = 0  # Epochs to delay before starting KL annealing (KL weight =
 
 [loss]
 reconstruction_weight = 1.0
-kl_weight = 0.001
-free_bits = 0.3  # Minimum KL per latent dimension (prevents per-dim collapse)
+kl_weight = 0.0001
+free_bits = 0.5  # Minimum KL per latent dimension (prevents per-dim collapse)
 reconstruction_type = "fractional_ce"  # "mse" | "l1" | "bce_logits"
 mask_threshold = 0.0
 bg_weight = 0.0
