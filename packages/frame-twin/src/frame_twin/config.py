@@ -395,11 +395,130 @@ class InferenceConfig(BaseModel):
     sampling: SamplingConfig
     conditioning: Dict  # Flexible conditioning parameters
     output: OutputConfig
-    
+
     @classmethod
     def from_toml(cls, path: Union[str, Path]) -> 'InferenceConfig':
         """Load configuration from TOML file."""
         path = Path(path)
         with open(path, 'rb') as f:
             data = tomli.load(f)
+        return cls(**data)
+
+
+class OptunaConfig(BaseModel):
+    """Optuna study configuration."""
+    study_name: str
+    n_trials: int = 50
+    storage: Optional[str] = None  # SQLite path, defaults to experiment dir
+    sampler: Literal["tpe", "random", "cmaes"] = "tpe"
+    pruner: Optional[Literal["median", "hyperband", "none"]] = "median"
+    n_startup_trials: int = 5
+    n_warmup_steps: int = 10
+
+
+class SearchSpaceParamConfig(BaseModel):
+    """Configuration for a single hyperparameter in the search space."""
+    type: Literal["int", "float", "categorical"]
+    min: Optional[float] = None
+    max: Optional[float] = None
+    step: Optional[float] = None
+    log: bool = False
+    choices: Optional[List[Union[int, float, str]]] = None
+
+
+class SearchSpaceConfig(BaseModel):
+    """Hyperparameter search space definition.
+
+    Each field can be a SearchSpaceParamConfig dict or None to skip optimization.
+    """
+    latent_channels: Optional[SearchSpaceParamConfig] = None
+    channel_schedule_type: Optional[SearchSpaceParamConfig] = None  # shallow, medium, deep
+    base_channels: Optional[SearchSpaceParamConfig] = None
+    kl_weight: Optional[SearchSpaceParamConfig] = None
+    free_bits: Optional[SearchSpaceParamConfig] = None
+    edge_weight: Optional[SearchSpaceParamConfig] = None
+    learning_rate: Optional[SearchSpaceParamConfig] = None
+    kl_warmup_epochs: Optional[SearchSpaceParamConfig] = None
+    optimizer: Optional[SearchSpaceParamConfig] = None
+    batch_size: Optional[SearchSpaceParamConfig] = None
+
+
+class ObjectiveConfig(BaseModel):
+    """Configuration for a single optimization objective."""
+    name: str  # Metric name (e.g., "val_loss", "kl_total", "mu_mean")
+    direction: Literal["minimize", "maximize", "target"]
+    target: Optional[float] = None  # Target value for direction="target"
+    tolerance: Optional[float] = None  # Tolerance for target-based objectives
+    weight: float = 1.0  # Weight in weighted sum (if using weighted combination)
+
+
+class OptimizationConfig(BaseModel):
+    """Configuration for Optuna hyperparameter optimization."""
+    metadata: MetadataConfig
+    data: DataConfig
+    model_type: Literal["vae", "unet_vae", "hvae"]
+
+    # Base config with fixed parameters
+    base_training: TrainingConfig
+    base_loss: LossConfig
+    base_model: Union[VAEModelConfig, HVAEModelConfig]
+    base_checkpointing: CheckpointingConfig
+    base_logging: LoggingConfig
+
+    # Optimization settings
+    optuna: OptunaConfig
+    search_space: SearchSpaceConfig
+
+    # Objectives to optimize (multiple for Pareto front)
+    objectives: List[ObjectiveConfig]
+
+    @classmethod
+    def from_toml(cls, path: Union[str, Path]) -> 'OptimizationConfig':
+        """Load configuration from TOML file."""
+        path = Path(path)
+        with open(path, 'rb') as f:
+            data = tomli.load(f)
+
+        search_space = data.get('search_space', {})
+
+        def _default_from_search(param_name: str, fallback):
+            """Pick a deterministic default from the search space if present."""
+            param_cfg = search_space.get(param_name, {})
+            param_type = param_cfg.get('type')
+
+            if param_type == "categorical":
+                choices = param_cfg.get('choices') or []
+                if choices:
+                    return choices[0]
+            elif param_type in ("int", "float"):
+                # Use the minimum as a safe placeholder
+                if param_cfg.get('min') is not None:
+                    return param_cfg['min']
+
+            return fallback
+
+        # Allow optimization configs to omit tuned fields by backfilling them from the search space
+        data.setdefault('model_type', data.get('base_model', {}).get('type', 'vae'))
+
+        base_training = data.setdefault('base_training', {})
+        base_training.setdefault('batch_size', int(_default_from_search('batch_size', 1)))
+        base_training.setdefault('learning_rate', float(_default_from_search('learning_rate', 1e-4)))
+        base_training.setdefault('optimizer', _default_from_search('optimizer', 'adam'))
+
+        base_model = data.setdefault('base_model', {})
+        base_model.setdefault('type', data['model_type'])
+        base_model.setdefault('latent_channels', int(_default_from_search('latent_channels', 32)))
+
+        has_schedule = any(base_model.get(key) is not None for key in ('channel_schedule', 'base_channels', 'levels'))
+        if not has_schedule:
+            base_channels = int(_default_from_search('base_channels', 32))
+            schedule_choice = _default_from_search('channel_schedule_type', 'medium')
+            if schedule_choice == 'shallow':
+                channel_schedule = [base_channels, base_channels * 2]
+            elif schedule_choice == 'deep':
+                channel_schedule = [base_channels, base_channels * 2, base_channels * 4, base_channels * 8]
+            else:
+                channel_schedule = [base_channels, base_channels * 2, base_channels * 4]
+            base_model['channel_schedule'] = channel_schedule
+
         return cls(**data)

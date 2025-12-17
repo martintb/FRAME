@@ -285,13 +285,18 @@ class BaseTrainer:
 
         return epoch_metrics
     
-    def train(self, start_epoch: int = 0) -> None:
-        """Main training loop with graceful interruption support."""
+    def train(self, start_epoch: int = 0, epoch_callback=None) -> None:
+        """Main training loop with graceful interruption support.
+
+        Args:
+            start_epoch: Epoch to start from (for resuming training)
+            epoch_callback: Optional callback called after each epoch with (epoch, val_metrics)
+        """
         self.current_epoch = start_epoch
-        
+
         # Setup signal handlers
         self._setup_signal_handlers()
-        
+
         # Log initial hyperparameters at the start of training
         self._log_initial_hparams()
         
@@ -318,7 +323,11 @@ class BaseTrainer:
                 # Check for interruption after validation
                 if self.interrupted or self._check_stop_signal():
                     self._handle_interruption(train_metrics, val_metrics)
-                
+
+                # Call epoch callback if provided
+                if epoch_callback is not None:
+                    epoch_callback(epoch, val_metrics)
+
                 # Update scheduler
                 if self.scheduler is not None:
                     if isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):

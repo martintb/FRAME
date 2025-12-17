@@ -146,6 +146,20 @@ def register_subcommands(subparsers):
         help="Optional comma-separated channel indices to visualize (e.g., '0,4,7')"
     )
 
+    # Optimize command
+    optimize_parser = twin_subparsers.add_parser(
+        'optimize', help='Run Optuna hyperparameter optimization'
+    )
+    optimize_parser.add_argument(
+        'config',
+        help='Path to optimization config TOML file'
+    )
+    optimize_parser.add_argument(
+        '--resume',
+        action='store_true',
+        help='Resume existing study if it exists'
+    )
+
 
 def main():
     """Main CLI entry point."""
@@ -223,7 +237,21 @@ def main():
         '--channels', type=str,
         help="Optional comma-separated channel indices to visualize (e.g., '0,4,7')"
     )
-    
+
+    # Optimize command
+    optimize_parser = subparsers.add_parser(
+        'optimize', help='Run Optuna hyperparameter optimization'
+    )
+    optimize_parser.add_argument(
+        'config',
+        help='Path to optimization config TOML file'
+    )
+    optimize_parser.add_argument(
+        '--resume',
+        action='store_true',
+        help='Resume existing study if it exists'
+    )
+
     args = parser.parse_args()
     
     if args.command == 'train':
@@ -294,6 +322,8 @@ def main():
             sigma=args.sigma,
             channels_to_show=channels
         )
+    elif args.command == 'optimize':
+        optimize_vae(args.config, resume=args.resume)
     else:
         parser.print_help()
         sys.exit(1)
@@ -318,10 +348,18 @@ def train(config_path: str):
         raise ValueError(f"Unknown model type: {model_type}. Expected 'vae', 'unet_vae', 'hvae', 'vp_hvae', or 'ddpm'")
 
 
-def train_vae(config_path: str):
-    """Train VAE model."""
+def train_vae(config_path: str, epoch_callback=None):
+    """Train VAE model.
+
+    Args:
+        config_path: Path to training config TOML file
+        epoch_callback: Optional callback function called after each epoch with (epoch, metrics)
+
+    Returns:
+        Experiment object
+    """
     from frame.management import ExperimentManager
-    
+
     print(f"Loading VAE config from {config_path}")
     config = VAEConfig.from_toml(config_path)
     
@@ -405,12 +443,14 @@ def train_vae(config_path: str):
     
     print("Starting VAE training...")
     try:
-        trainer.train()
+        trainer.train(epoch_callback=epoch_callback)
         experiment.update_status("completed")
         print("VAE training completed!")
     except Exception as e:
         experiment.update_status("failed")
         raise e
+
+    return experiment
 
 
 def train_vae_with_checkpoint(config_path: str, experiment, checkpoint_path: str):
@@ -831,6 +871,29 @@ def continue_training(experiment_uuid: str, config_path: Optional[str] = None):
         
     else:
         raise ValueError(f"Unknown model type: {experiment.model_type}")
+
+
+def optimize_vae(config_path: str, resume: bool = False) -> None:
+    """Run Optuna hyperparameter optimization for VAE.
+
+    Args:
+        config_path: Path to optimization config TOML file
+        resume: If True, resume existing study if it exists
+    """
+    from frame_twin.optimization import OptunaOptimizer
+    from frame_twin.config import OptimizationConfig
+
+    print(f"Loading optimization config from {config_path}")
+    config = OptimizationConfig.from_toml(config_path)
+
+    print("Creating Optuna optimizer...")
+    optimizer = OptunaOptimizer(config, config_path=config_path)
+
+    print("Running optimization study...")
+    study = optimizer.run(resume=resume)
+
+    print(f"\nOptimization complete! Study results saved to:")
+    print(f"  {optimizer.parent_experiment.path / 'results'}")
 
 
 def generate_config(model_type: str, output_path: str):

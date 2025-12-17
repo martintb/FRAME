@@ -1,0 +1,168 @@
+# Optuna VAE Hyperparameter Optimization Configuration
+# This config defines a hyperparameter search study for VAE training
+
+[metadata]
+name = "vae_hp_search"
+random_seed = 42
+
+[data]
+# library_uuid = "lib_e2b3643a1cf1"  # lnp_10k_2ch_lhs library
+library_uuid = "lib_ede0b11a4f77"  # lnp_1k_2ch_lhs library
+split_strategy = "random"
+train_ratio = 0.8
+val_ratio = 0.1
+test_ratio = 0.1
+
+# Data augmentation
+random_crop_size = 64
+random_rotation = true
+reject_bg_only_crops = true
+bg_channel_name = "water"
+max_bg_crop_attempts = 32
+
+model_type = "vae"
+
+[base_model]
+# Fixed model parameters (not optimized)
+type = "vae"
+input_channels = 2
+spatial_latent = true
+logvar_mode = "learned"
+
+[base_training]
+# Fixed training parameters
+device = "mps"
+num_epochs = 25  # Short trials for fast iteration
+num_workers = 0
+distributed = false
+scheduler = "cosine"
+grad_clip = 1.0
+
+# KL annealing (fixed strategy)
+kl_annealing_strategy = "linear"
+kl_delay_epochs = 0
+
+[base_loss]
+# Fixed loss parameters
+reconstruction_weight = 1.0
+reconstruction_type = "fractional_ce"
+mask_threshold = 0.0
+bg_weight = 0.0
+label_smoothing = 0.0
+
+[base_checkpointing]
+save_every_epochs = 100  # Save less frequently during trials
+save_every_minutes = 60
+keep_last_n = 2
+save_best = true
+
+[base_logging]
+log_every_steps = 10
+recon_compare_every_epochs = 0  # Disable to save time
+analyze_latent_every_epochs = 5  # Enable for latent metrics
+max_latent_analysis_samples = 32
+
+# Enable metrics needed for objectives
+log_latent_histograms = true
+compute_active_units = true
+compute_prior_sample_quality = false  # Disable to save time
+compute_interpolation_smoothness = false  # Disable to save time
+active_units_threshold = 0.01
+
+[optuna]
+study_name = "vae_latent_health_optimization"
+n_trials = 50
+sampler = "tpe"  # Tree-structured Parzen Estimator
+pruner = "median"  # Prune unpromising trials
+n_startup_trials = 5  # Random trials before TPE
+n_warmup_steps = 10  # Epochs before pruning starts
+
+# Search space configuration
+# Each parameter defines: type, min/max (or choices), log scale
+
+[search_space]
+
+[search_space.latent_channels]
+type = "categorical"
+choices = [64, 96, 128, 192, 256]
+
+[search_space.channel_schedule_type]
+type = "categorical"
+choices = ["shallow", "medium", "deep"]  # 2, 3, or 4 levels
+
+[search_space.base_channels]
+type = "categorical"
+choices = [32, 48, 64]
+
+[search_space.kl_weight]
+type = "float"
+min = 1.0e-5
+max = 1.0e-2
+log = true
+
+[search_space.free_bits]
+type = "float"
+min = 0.0
+max = 2.0
+log = false
+
+[search_space.edge_weight]
+type = "float"
+min = 0.0
+max = 0.5
+log = false
+
+[search_space.learning_rate]
+type = "float"
+min = 1.0e-5
+max = 1.0e-3
+log = true
+
+[search_space.kl_warmup_epochs]
+type = "int"
+min = 5
+max = 20
+log = false
+
+[search_space.optimizer]
+type = "categorical"
+choices = ["adam"]
+
+[search_space.batch_size]
+type = "categorical"
+choices = [32]
+
+# Optimization objectives (multi-objective Pareto front)
+
+[[objectives]]
+name = "val_loss"
+direction = "minimize"
+weight = 1.0
+
+[[objectives]]
+name = "kl_total"
+direction = "maximize"
+weight = 1.0
+
+[[objectives]]
+name = "active_units_fraction"
+direction = "maximize"
+weight = 1.0
+
+[[objectives]]
+name = "mu_mean"
+direction = "target"
+target = 0.0
+tolerance = 0.1
+
+[[objectives]]
+name = "mu_std"
+direction = "target"
+target = 1.0
+tolerance = 0.2
+
+[[objectives]]
+name = "std_mean"
+direction = "target"
+target = 1.0
+tolerance = 0.2

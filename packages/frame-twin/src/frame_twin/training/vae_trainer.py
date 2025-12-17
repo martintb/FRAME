@@ -958,13 +958,121 @@ class VAETrainer(BaseTrainer):
                 self.writer.add_scalar(f"{prefix}/interpolation_smoothness_mean", np.mean(smoothness_scores), step)
                 self.writer.add_scalar(f"{prefix}/interpolation_smoothness_std", np.std(smoothness_scores), step)
 
-    def train(self, start_epoch: int = 0) -> None:
-        """Train the VAE model."""
+    def validate_epoch(self) -> Dict[str, float]:
+        """Validate for one epoch and compute latent statistics.
+
+        Returns:
+            Dict of validation metrics including latent statistics
+        """
+        # Call parent validation
+        val_metrics = super().validate_epoch()
+
+        # Compute latent statistics if we have latent data
+        if hasattr(self, '_last_val_latent_tuple') and self._last_val_latent_tuple is not None:
+            try:
+                # Extract latent statistics
+                latent_stats = self._compute_latent_stats(self._last_val_latent_tuple)
+                # Add to validation metrics
+                val_metrics.update(latent_stats)
+            except Exception as e:
+                print(f"Warning: Failed to compute latent statistics: {e}")
+
+        return val_metrics
+
+    def _compute_latent_stats(self, latent_tuple: tuple) -> Dict[str, float]:
+        """Compute latent statistics from latent tuple.
+
+        Returns:
+            Dict of latent statistics (mu_mean, mu_std, std_mean, etc.)
+        """
+        with torch.no_grad():
+            stats = {}
+
+            if self.is_hvae:
+                z_top, mu_top, logvar_top, z_bottom, mu_bottom, logvar_bottom = latent_tuple[:6]
+
+                # Top latent stats
+                mu_c = mu_top.mean(dim=(2, 3, 4)) if mu_top.ndim == 5 else mu_top
+                std_c = (0.5 * logvar_top).exp().mean(dim=(2, 3, 4)) if logvar_top.ndim == 5 else (0.5 * logvar_top).exp()
+
+                stats['mu_mean'] = mu_c.mean().item()
+                stats['mu_std'] = mu_c.std().item()
+                stats['std_mean'] = std_c.mean().item()
+
+                # Compute kl_total for top latent
+                kl_per_dim = 0.5 * (mu_c.pow(2) + std_c.pow(2) - 1.0 - (2 * std_c.log()))
+                stats['kl_total'] = kl_per_dim.sum(dim=1).mean().item()
+
+                # Compute active units
+                if hasattr(self.config.logging, 'compute_active_units') and self.config.logging.compute_active_units:
+                    threshold = getattr(self.config.logging, 'active_units_threshold', 0.01)
+                    mu_var = mu_c.var(dim=0)  # Variance across batch for each dimension
+                    active = (mu_var > threshold).float()
+                    stats['active_units_fraction'] = active.mean().item()
+
+            elif getattr(self, 'is_vp_hvae', False):
+                # VP-HVAE: use z2 (top latent)
+                z1_q, z1_q_mean, z1_q_logvar, z2_q, z2_q_mean, z2_q_logvar = latent_tuple[:6]
+
+                mu_c = z2_q_mean
+                std_c = (0.5 * z2_q_logvar).exp()
+
+                stats['mu_mean'] = mu_c.mean().item()
+                stats['mu_std'] = mu_c.std().item()
+                stats['std_mean'] = std_c.mean().item()
+
+                # Compute kl_total
+                kl_per_dim = 0.5 * (mu_c.pow(2) + std_c.pow(2) - 1.0 - (2 * std_c.log()))
+                stats['kl_total'] = kl_per_dim.sum(dim=1).mean().item()
+
+                # Compute active units
+                if hasattr(self.config.logging, 'compute_active_units') and self.config.logging.compute_active_units:
+                    threshold = getattr(self.config.logging, 'active_units_threshold', 0.01)
+                    mu_var = mu_c.var(dim=0)
+                    active = (mu_var > threshold).float()
+                    stats['active_units_fraction'] = active.mean().item()
+
+            else:
+                # Standard VAE
+                z, mu, logvar = latent_tuple
+
+                # Handle spatial vs non-spatial latents
+                if mu.ndim == 5:
+                    mu_c = mu.mean(dim=(2, 3, 4))
+                    std_c = (0.5 * logvar).exp().mean(dim=(2, 3, 4))
+                else:
+                    mu_c = mu
+                    std_c = (0.5 * logvar).exp()
+
+                stats['mu_mean'] = mu_c.mean().item()
+                stats['mu_std'] = mu_c.std().item()
+                stats['std_mean'] = std_c.mean().item()
+
+                # Compute kl_total
+                kl_per_dim = 0.5 * (mu_c.pow(2) + std_c.pow(2) - 1.0 - (2 * std_c.log()))
+                stats['kl_total'] = kl_per_dim.sum(dim=1).mean().item()
+
+                # Compute active units
+                if hasattr(self.config.logging, 'compute_active_units') and self.config.logging.compute_active_units:
+                    threshold = getattr(self.config.logging, 'active_units_threshold', 0.01)
+                    mu_var = mu_c.var(dim=0)  # Variance across batch for each dimension
+                    active = (mu_var > threshold).float()
+                    stats['active_units_fraction'] = active.mean().item()
+
+            return stats
+
+    def train(self, start_epoch: int = 0, epoch_callback=None) -> None:
+        """Train the VAE model.
+
+        Args:
+            start_epoch: Epoch to start from (for resuming training)
+            epoch_callback: Optional callback called after each epoch with (epoch, val_metrics)
+        """
         if self.train_loader is None or self.val_loader is None:
             raise ValueError("Data loaders must be set before training")
-        
-        super().train(start_epoch)
-    
+
+        super().train(start_epoch, epoch_callback=epoch_callback)
+
     def encode_batch(self, voxels: torch.Tensor) -> torch.Tensor:
         """Encode a batch of voxels to latent space."""
         self.model.eval()

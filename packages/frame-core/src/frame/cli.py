@@ -696,6 +696,8 @@ def main():
                     sigma=args.sigma,
                     channels_to_show=channels
                 )
+            elif args.twin_command == "optimize":
+                twin_cli.optimize_vae(args.config, resume=args.resume)
             else:
                 print(f"Unknown twin command: {args.twin_command}")
                 sys.exit(1)
