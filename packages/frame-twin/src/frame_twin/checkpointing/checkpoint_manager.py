@@ -245,19 +245,86 @@ class CheckpointManager:
     
     def _cleanup_old_checkpoints(self):
         """Remove old checkpoints to keep only the last N."""
-        checkpoint_files = list(self.output_dir.glob("checkpoint_*.pt"))
-        
+        # Collect ALL checkpoint files (not just checkpoint_*.pt)
+        checkpoint_files = []
+        for pattern in ["checkpoint_*.pt", "best_model.pt"]:
+            checkpoint_files.extend(self.output_dir.glob(pattern))
+
         if len(checkpoint_files) <= self.config.keep_last_n:
             return
-        
+
         # Sort by modification time (oldest first)
         checkpoint_files.sort(key=lambda p: p.stat().st_mtime)
-        
-        # Remove oldest checkpoints
+
+        # Remove oldest checkpoints (both files and their UUID directories)
         files_to_remove = checkpoint_files[:-self.config.keep_last_n]
         for file_path in files_to_remove:
-            file_path.unlink()
-    
+            try:
+                # Remove the checkpoint file
+                file_path.unlink()
+
+                # Remove associated UUID-based directory if it exists
+                self._cleanup_associated_uuid_dir(file_path)
+            except Exception as e:
+                print(f"Warning: Failed to remove checkpoint {file_path}: {e}")
+
+    def _cleanup_associated_uuid_dir(self, checkpoint_file: Path):
+        """Remove UUID-based checkpoint directory associated with a checkpoint file.
+
+        Args:
+            checkpoint_file: Path to the checkpoint file that was removed
+        """
+        import json
+
+        # Find matching ckpt_{uuid} directory by checking metadata
+        for ckpt_dir in self.output_dir.glob("ckpt_*"):
+            if not ckpt_dir.is_dir():
+                continue
+
+            metadata_path = ckpt_dir / "metadata.json"
+            if not metadata_path.exists():
+                continue
+
+            try:
+                # Check if this UUID dir contains a copy of our checkpoint
+                uuid_checkpoint = list(ckpt_dir.glob("*.pt"))
+                if uuid_checkpoint and uuid_checkpoint[0].name == checkpoint_file.name:
+                    # Remove write protection and delete directory
+                    self._remove_write_protection_and_delete(ckpt_dir)
+                    break
+            except Exception as e:
+                print(f"Warning: Failed to remove UUID checkpoint directory {ckpt_dir}: {e}")
+
+    def _remove_write_protection_and_delete(self, directory: Path):
+        """Remove write protection from directory contents and delete the directory.
+
+        Args:
+            directory: Path to directory to remove
+        """
+        import os
+        import shutil
+        import stat
+
+        def make_writable(path):
+            """Remove write protection from a file or directory."""
+            current_permissions = os.stat(path).st_mode
+            os.chmod(path, current_permissions | stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH)
+
+        # Make all files in directory writable
+        for root, dirs, files in os.walk(directory, topdown=False):
+            for name in files:
+                file_path = Path(root) / name
+                make_writable(file_path)
+            for name in dirs:
+                dir_path = Path(root) / name
+                make_writable(dir_path)
+
+        # Make the directory itself writable
+        make_writable(directory)
+
+        # Remove the directory
+        shutil.rmtree(directory)
+
     def save_training_history(self):
         """Save training history to JSON."""
         history_path = self.output_dir / "training_history.json"

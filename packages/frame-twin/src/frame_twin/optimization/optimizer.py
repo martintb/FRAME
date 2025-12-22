@@ -89,6 +89,15 @@ class OptunaOptimizer:
         # Analyze results
         self.analyze_results(self.study)
 
+        # Create symlink to best trial (first Pareto-optimal trial)
+        if self.study.best_trials:
+            best_trial = self.study.best_trials[0]
+            if 'trial_uuid' in best_trial.user_attrs:
+                best_trial_uuid = best_trial.user_attrs['trial_uuid']
+                print(f"\nCreating symlink to best trial: {best_trial_uuid}")
+                self._link_best_trial(best_trial_uuid)
+                print(f"  Symlink created at: {self.parent_experiment.path / 'best_trial'}")
+
         return self.study
 
     def _create_parent_experiment(self):
@@ -135,6 +144,10 @@ class OptunaOptimizer:
         # Create results directory
         results_dir = experiment.path / "results"
         results_dir.mkdir(exist_ok=True)
+
+        # Create trials subdirectory for storing individual trial experiments
+        trials_dir = experiment.path / "trials"
+        trials_dir.mkdir(exist_ok=True)
 
         return experiment
 
@@ -194,7 +207,8 @@ class OptunaOptimizer:
             metrics = self._extract_metrics(trial_experiment)
 
             # 5. Log trial info
-            trial.set_user_attr('experiment_uuid', trial_experiment.uuid)
+            trial.set_user_attr('trial_uuid', trial_experiment.uuid)  # Store trial UUID for symlinking
+            trial.set_user_attr('experiment_uuid', trial_experiment.uuid)  # Legacy compatibility
             trial.set_user_attr('experiment_path', str(trial_experiment.path))
             for k, v in metrics.items():
                 trial.set_user_attr(k, v)
@@ -295,63 +309,73 @@ class OptunaOptimizer:
         return config_path
 
     def _run_trial_training(self, trial: optuna.Trial, config_path: Path):
-        """Run VAE training for a trial.
+        """Run VAE training for a trial in a subdirectory.
 
         Args:
             trial: Optuna trial
             config_path: Path to trial config
 
         Returns:
-            Trial experiment object
+            Trial experiment object (lightweight namespace, not registered in ExperimentManager)
         """
-        # Import train_vae from CLI
-        from frame_twin.cli import train_vae
+        import shutil
+        from frame.management.utils import generate_uuid, timestamp_iso
 
-        # Create pruning callback if pruner is enabled
-        pruning_callback = None
-        if self.config.optuna.pruner is not None and self.config.optuna.pruner != "none":
-            pruning_callback = OptunaPruningCallback(trial, monitor_metric='val_loss')
+        # Create trial subdirectory with UUID
+        trial_uuid = generate_uuid("trial")
+        trial_dir = self.parent_experiment.path / "trials" / trial_uuid
+        trial_dir.mkdir(parents=True, exist_ok=True)
 
-        # Run training
-        # Note: This requires train_vae to be modified to:
-        # 1. Return the experiment
-        # 2. Accept an optional epoch_callback parameter
-        experiment = train_vae(str(config_path))
+        # Create trial manifest (not registered in ExperimentManager)
+        trial_manifest = {
+            "uuid": trial_uuid,
+            "trial_number": trial.number,
+            "parent_experiment": self.parent_experiment.uuid,
+            "study_name": self.config.optuna.study_name,
+            "created_at": timestamp_iso(),
+            "config_path": str(config_path),
+            "checkpoints": [],
+            "best_checkpoint": None,
+            "status": "running"
+        }
 
-        # Add Optuna tags to experiment
-        experiment.add_tag("optuna-trial")
-        experiment.add_tag(f"study-{self.config.optuna.study_name}")
-        experiment.add_tag(f"trial-{trial.number}")
+        # Save trial config and manifest
+        shutil.copy(config_path, trial_dir / "config.toml")
+        self._update_trial_manifest(trial_dir, trial_manifest)
 
-        # Add dependency to parent experiment
-        manifest_path = experiment.path / "manifest.json"
-        with open(manifest_path, 'r') as f:
-            manifest = json.load(f)
+        # Create lightweight experiment object for trainer
+        trial_exp = self._create_trial_experiment_object(trial_dir, trial_uuid, trial_manifest)
 
-        manifest['dependencies'] = {'parent_optimization': self.parent_experiment.uuid}
+        # Run training directly (without creating top-level experiment)
+        try:
+            self._train_trial(config_path, trial_exp)
+            trial_manifest["status"] = "completed"
+        except Exception as e:
+            trial_manifest["status"] = "failed"
+            trial_manifest["error"] = str(e)
+            raise e
+        finally:
+            self._update_trial_manifest(trial_dir, trial_manifest)
 
-        with open(manifest_path, 'w') as f:
-            json.dump(manifest, f, indent=2)
-
-        return experiment
+        return trial_exp
 
     def _extract_metrics(self, experiment) -> Dict[str, float]:
-        """Extract metrics from completed experiment.
+        """Extract metrics from completed trial experiment.
 
         Args:
-            experiment: Experiment object
+            experiment: Trial experiment object (SimpleNamespace from trial subdirectory)
 
         Returns:
             Dict of metric name -> value
         """
-        # Get best checkpoint
+        # Get best checkpoint from trial subdirectory
         if experiment.best_checkpoint:
             ckpt = self.ckpt_mgr.get_checkpoint(experiment.path, experiment.best_checkpoint)
         else:
             # Fallback to last checkpoint
             checkpoints = self.ckpt_mgr.list_checkpoints(experiment.path)
             if not checkpoints:
-                raise ValueError(f"No checkpoints found for experiment {experiment.uuid}")
+                raise ValueError(f"No checkpoints found for trial {experiment.uuid}")
             ckpt = checkpoints[-1]
 
         return ckpt.metrics
@@ -446,6 +470,124 @@ class OptunaOptimizer:
                 for j, obj in enumerate(self.config.objectives):
                     print(f"    {obj.name}: {t.values[j]:.4f}")
                 print(f"    Experiment: {t.user_attrs.get('experiment_uuid')}")
+
+    def _create_trial_experiment_object(self, trial_dir: Path, trial_uuid: str, manifest: Dict):
+        """Create a lightweight experiment-like object for trial training.
+
+        Args:
+            trial_dir: Path to trial directory
+            trial_uuid: Trial UUID
+            manifest: Trial manifest dict
+
+        Returns:
+            SimpleNamespace object that mimics an Experiment for the trainer
+        """
+        from types import SimpleNamespace
+
+        # Create object that looks like an Experiment but isn't registered
+        trial_exp = SimpleNamespace(
+            uuid=trial_uuid,
+            path=trial_dir,
+            checkpoints=manifest.get("checkpoints", []),
+            best_checkpoint=manifest.get("best_checkpoint"),
+            _manifest=manifest,
+            _update_manifest=lambda: self._update_trial_manifest(trial_dir, manifest),
+            add_tag=lambda tag: None,  # No-op for trials
+            update_status=lambda status: None  # No-op for trials
+        )
+        return trial_exp
+
+    def _update_trial_manifest(self, trial_dir: Path, manifest: Dict):
+        """Update trial manifest.json file.
+
+        Args:
+            trial_dir: Path to trial directory
+            manifest: Updated manifest dict
+        """
+        manifest_path = trial_dir / "manifest.json"
+        with open(manifest_path, 'w') as f:
+            json.dump(manifest, f, indent=2)
+
+    def _train_trial(self, config_path: Path, trial_exp):
+        """Run VAE training for a trial (adapted from train_vae in cli.py).
+
+        Args:
+            config_path: Path to trial config TOML
+            trial_exp: Trial experiment object (SimpleNamespace)
+        """
+        from frame_twin.cli import _resolve_library_path, _resolve_background_params
+
+        # Load config
+        config = VAEConfig.from_toml(str(config_path))
+
+        # Resolve library path and load voxel library
+        library_path, library_uuid = _resolve_library_path(config.data.library_uuid)
+        voxel_library = VoxelLibrary(library_path)
+
+        # Create data splits
+        data_splits = create_data_splits(
+            voxel_library=voxel_library,
+            split_strategy=config.data.split_strategy,
+            train_ratio=config.data.train_ratio,
+            val_ratio=config.data.val_ratio,
+            test_ratio=config.data.test_ratio,
+            stratify_params=config.data.stratify_params,
+            random_seed=config.metadata.random_seed
+        )
+
+        # Create data loaders
+        pin_memory = config.training.device == "cuda"
+        reject_bg, bg_channel_index, max_bg_attempts, bg_tol = _resolve_background_params(config.data, voxel_library)
+
+        loaders = create_data_loaders(
+            voxel_library=voxel_library,
+            data_splits=data_splits,
+            batch_size=config.training.batch_size,
+            device=None,
+            num_workers=config.training.num_workers,
+            pin_memory=pin_memory,
+            random_crop_size=config.data.random_crop_size,
+            random_rotation=config.data.random_rotation,
+            reject_bg_only_crops=reject_bg,
+            bg_channel_index=bg_channel_index,
+            max_bg_crop_attempts=max_bg_attempts,
+            bg_only_tolerance=bg_tol
+        )
+        train_loader = loaders['train']
+        val_loader = loaders['val']
+
+        # Initialize trainer with trial experiment
+        trainer = VAETrainer(config, experiment=trial_exp)
+        trainer.set_data_loaders(train_loader, val_loader)
+
+        # Run training
+        trainer.train()
+
+    def _link_best_trial(self, best_trial_uuid: str):
+        """Create symlink to best trial.
+
+        Args:
+            best_trial_uuid: UUID of the best trial
+        """
+        source = Path("trials") / best_trial_uuid  # Relative path for symlink
+        target = self.parent_experiment.path / "best_trial"
+
+        # Remove existing symlink if present
+        if target.exists() or target.is_symlink():
+            target.unlink()
+
+        # Create new symlink
+        target.symlink_to(source, target_is_directory=True)
+
+        # Update parent experiment manifest with best trial info
+        manifest_path = self.parent_experiment.path / "manifest.json"
+        with open(manifest_path, 'r') as f:
+            parent_manifest = json.load(f)
+
+        parent_manifest['best_trial'] = best_trial_uuid
+
+        with open(manifest_path, 'w') as f:
+            json.dump(parent_manifest, f, indent=2)
 
     @staticmethod
     def _remove_nones(obj):
