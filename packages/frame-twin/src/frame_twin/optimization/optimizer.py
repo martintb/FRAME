@@ -249,20 +249,27 @@ class OptunaOptimizer:
             # 2. Create trial config
             trial_config = self._create_trial_config(trial, params)
 
-            # 3. Run training
-            trial_experiment = self._run_trial_training(trial, trial_config)
+            # 3. Create pruning callback if pruner is enabled
+            pruning_callback = None
+            if self.config.optuna.pruner and self.config.optuna.pruner != "none":
+                # Monitor the first objective metric for pruning
+                monitor_metric = self.config.objectives[0].name
+                pruning_callback = OptunaPruningCallback(trial, monitor_metric=monitor_metric)
 
-            # 4. Extract metrics
+            # 4. Run training
+            trial_experiment = self._run_trial_training(trial, trial_config, pruning_callback)
+
+            # 5. Extract metrics
             metrics = self._extract_metrics(trial_experiment)
 
-            # 5. Log trial info
+            # 6. Log trial info
             trial.set_user_attr('trial_uuid', trial_experiment.uuid)  # Store trial UUID for symlinking
             trial.set_user_attr('experiment_uuid', trial_experiment.uuid)  # Legacy compatibility
             trial.set_user_attr('experiment_path', str(trial_experiment.path))
             for k, v in metrics.items():
                 trial.set_user_attr(k, v)
 
-            # 6. Build and return objectives
+            # 7. Build and return objectives
             objectives = build_objective_tuple(metrics, self.config.objectives)
 
             print(f"\nTrial {trial.number} complete:")
@@ -360,12 +367,13 @@ class OptunaOptimizer:
 
         return config_path
 
-    def _run_trial_training(self, trial: optuna.Trial, config_path: Path):
+    def _run_trial_training(self, trial: optuna.Trial, config_path: Path, pruning_callback=None):
         """Run VAE training for a trial in a subdirectory.
 
         Args:
             trial: Optuna trial
             config_path: Path to trial config
+            pruning_callback: Optional callback for pruning unpromising trials
 
         Returns:
             Trial experiment object (lightweight namespace, not registered in ExperimentManager)
@@ -400,7 +408,7 @@ class OptunaOptimizer:
 
         # Run training directly (without creating top-level experiment)
         try:
-            self._train_trial(config_path, trial_exp)
+            self._train_trial(config_path, trial_exp, pruning_callback)
             trial_manifest["status"] = "completed"
         except Exception as e:
             trial_manifest["status"] = "failed"
@@ -560,12 +568,13 @@ class OptunaOptimizer:
         with open(manifest_path, 'w') as f:
             json.dump(manifest, f, indent=2)
 
-    def _train_trial(self, config_path: Path, trial_exp):
+    def _train_trial(self, config_path: Path, trial_exp, pruning_callback=None):
         """Run VAE training for a trial (adapted from train_vae in cli.py).
 
         Args:
             config_path: Path to trial config TOML
             trial_exp: Trial experiment object (SimpleNamespace)
+            pruning_callback: Optional callback for pruning unpromising trials
         """
         from frame_twin.cli import _resolve_library_path, _resolve_background_params
 
@@ -612,8 +621,8 @@ class OptunaOptimizer:
         trainer = VAETrainer(config, experiment=trial_exp)
         trainer.set_data_loaders(train_loader, val_loader)
 
-        # Run training
-        trainer.train()
+        # Run training with epoch callback for pruning
+        trainer.train(epoch_callback=pruning_callback)
 
     def _link_best_trial(self, best_trial_uuid: str):
         """Create symlink to best trial.
