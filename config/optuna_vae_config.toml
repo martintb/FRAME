@@ -2,12 +2,20 @@
 # This config defines a hyperparameter search study for VAE training
 
 [metadata]
-name = "vae_hp_search"
+name = "vae_hp_search_10ch"
 random_seed = 42
 
+[optuna]
+study_name = "vae_latent_health_optimization_10ch"
+n_trials = 250
+sampler = "tpe"  # Tree-structured Parzen Estimator
+pruner = "median"  # Prune unpromising trials
+n_startup_trials = 5  # Random trials before TPE
+n_warmup_steps = 10  # Epochs before pruning starts
+
 [data]
-# library_uuid = "lib_e2b3643a1cf1"  # lnp_10k_2ch_lhs library
-library_uuid = "lib_ede0b11a4f77"  # lnp_1k_2ch_lhs library
+# library_uuid = "lib_bfa56c77cbba"  # lnp_1k_2ch_lhs library
+library_uuid = "lib_17adb8df5a19"  # lnp_1k_10ch_lhs library
 split_strategy = "random"
 train_ratio = 0.8
 val_ratio = 0.1
@@ -31,7 +39,7 @@ logvar_mode = "learned"
 
 [base_training]
 # Fixed training parameters
-device = "mps"
+device = "cuda"
 num_epochs = 25  # Short trials for fast iteration
 num_workers = 0
 distributed = false
@@ -69,13 +77,6 @@ compute_prior_sample_quality = false  # Disable to save time
 compute_interpolation_smoothness = false  # Disable to save time
 active_units_threshold = 0.01
 
-[optuna]
-study_name = "vae_latent_health_optimization"
-n_trials = 50
-sampler = "tpe"  # Tree-structured Parzen Estimator
-pruner = "median"  # Prune unpromising trials
-n_startup_trials = 5  # Random trials before TPE
-n_warmup_steps = 10  # Epochs before pruning starts
 
 # Search space configuration
 # Each parameter defines: type, min/max (or choices), log scale

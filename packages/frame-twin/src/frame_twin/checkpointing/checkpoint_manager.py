@@ -47,9 +47,9 @@ class CheckpointManager:
     ) -> bool:
         """Check if a checkpoint should be saved."""
         current_time = time.time()
-        
+
         # Check epoch-based saving
-        if epoch % self.config.save_every_epochs == 0:
+        if epoch > 0 and epoch % self.config.save_every_epochs == 0:
             return True
         
         # Check time-based saving

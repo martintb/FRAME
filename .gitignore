@@ -12,6 +12,7 @@ outputs/
 ./data/
 visualizations/
 generated_structures/
+jobs/*
 
 # Logs
 logs/
