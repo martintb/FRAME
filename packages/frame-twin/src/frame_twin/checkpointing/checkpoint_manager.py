@@ -55,13 +55,7 @@ class CheckpointManager:
         # Check time-based saving
         if current_time - self.last_save_time >= self.config.save_every_minutes * 60:
             return True
-        
-        # Check if this is the best model
-        if (val_loss is not None and 
-            self.config.save_best and 
-            val_loss < self.best_val_loss):
-            return True
-        
+
         return False
     
     def save_checkpoint(
@@ -245,28 +239,33 @@ class CheckpointManager:
     
     def _cleanup_old_checkpoints(self):
         """Remove old checkpoints to keep only the last N."""
-        # Collect ALL checkpoint files (not just checkpoint_*.pt)
-        checkpoint_files = []
-        for pattern in ["checkpoint_*.pt", "best_model.pt"]:
-            checkpoint_files.extend(self.output_dir.glob(pattern))
+        # Clean up UUID-based checkpoint directories directly
+        # These are the primary storage created by frame-core
+        ckpt_dirs = list(self.output_dir.glob("ckpt_*"))
+        ckpt_dirs = [d for d in ckpt_dirs if d.is_dir()]
 
-        if len(checkpoint_files) <= self.config.keep_last_n:
-            return
+        if len(ckpt_dirs) > self.config.keep_last_n:
+            # Sort by modification time (oldest first)
+            ckpt_dirs.sort(key=lambda p: p.stat().st_mtime)
 
-        # Sort by modification time (oldest first)
-        checkpoint_files.sort(key=lambda p: p.stat().st_mtime)
+            # Remove oldest directories
+            dirs_to_remove = ckpt_dirs[:-self.config.keep_last_n]
+            for ckpt_dir in dirs_to_remove:
+                try:
+                    self._remove_write_protection_and_delete(ckpt_dir)
+                except Exception as e:
+                    print(f"Warning: Failed to remove checkpoint directory {ckpt_dir}: {e}")
 
-        # Remove oldest checkpoints (both files and their UUID directories)
-        files_to_remove = checkpoint_files[:-self.config.keep_last_n]
-        for file_path in files_to_remove:
-            try:
-                # Remove the checkpoint file
-                file_path.unlink()
-
-                # Remove associated UUID-based directory if it exists
-                self._cleanup_associated_uuid_dir(file_path)
-            except Exception as e:
-                print(f"Warning: Failed to remove checkpoint {file_path}: {e}")
+        # Also clean up loose checkpoint files (for backwards compatibility)
+        checkpoint_files = list(self.output_dir.glob("checkpoint_*.pt"))
+        if len(checkpoint_files) > self.config.keep_last_n:
+            checkpoint_files.sort(key=lambda p: p.stat().st_mtime)
+            files_to_remove = checkpoint_files[:-self.config.keep_last_n]
+            for file_path in files_to_remove:
+                try:
+                    file_path.unlink()
+                except Exception as e:
+                    print(f"Warning: Failed to remove checkpoint {file_path}: {e}")
 
     def _cleanup_associated_uuid_dir(self, checkpoint_file: Path):
         """Remove UUID-based checkpoint directory associated with a checkpoint file.

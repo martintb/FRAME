@@ -95,6 +95,10 @@ choices = ["shallow", "medium", "deep"]  # 2, 3, or 4 levels
 type = "categorical"
 choices = [32, 48, 64]
 
+[search_space.logvar_mode]
+type = "categorical"
+choices = ["learned", "fixed", "scalar"]
+
 [search_space.kl_weight]
 type = "float"
 min = 1.0e-5

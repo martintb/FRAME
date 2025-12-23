@@ -53,6 +53,9 @@ def suggest_hyperparameters(
     if search_space.base_channels is not None:
         params['base_channels'] = suggest_param('base_channels', search_space.base_channels)
 
+    if search_space.logvar_mode is not None:
+        params['logvar_mode'] = suggest_param('logvar_mode', search_space.logvar_mode)
+
     if search_space.kl_weight is not None:
         params['kl_weight'] = suggest_param('kl_weight', search_space.kl_weight)
 
