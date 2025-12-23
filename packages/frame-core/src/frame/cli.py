@@ -124,6 +124,13 @@ def setup_migrate_commands(subparsers):
     migrate_parser.add_argument("--name", help="Library name (defaults to directory name)")
 
 
+def setup_init_command(subparsers):
+    """Set up init command."""
+    init_parser = subparsers.add_parser("init", help="Install the default FRAME config")
+    init_parser.add_argument("--force", action="store_true", help="Overwrite existing config")
+    init_parser.add_argument("--no-dirs", action="store_true", help="Skip creating data directories")
+
+
 def handle_library_commands(args):
     """Handle library management commands."""
     lib_mgr = LibraryManager()
@@ -575,6 +582,27 @@ def handle_migrate_command(args):
         )
 
 
+def handle_init_command(args):
+    """Handle init command."""
+    from .config import FrameConfig, default_config_path, install_config
+
+    config_path = default_config_path()
+    config_path, created = install_config(
+        destination=config_path,
+        overwrite=args.force,
+    )
+
+    if created:
+        print(f"Installed config: {config_path}")
+    else:
+        print(f"Config already exists: {config_path}")
+
+    if not args.no_dirs:
+        config = FrameConfig(config_path)
+        config.ensure_directories()
+        print(f"Data directories: {config.libraries_path}, {config.experiments_path}")
+
+
 def setup_view_command(subparsers):
     """Set up view command for interactive visualization."""
     view_parser = subparsers.add_parser("view", help="Interactive visualization of voxel structures")
@@ -655,6 +683,7 @@ def main():
         setup_tensorboard_command(subparsers)
         setup_optuna_dashboard_command(subparsers)
         setup_migrate_commands(subparsers)
+        setup_init_command(subparsers)
         setup_view_command(subparsers)
 
         # Lightweight plugin stubs for help text
@@ -679,6 +708,7 @@ def main():
     setup_tensorboard_command(subparsers)
     setup_optuna_dashboard_command(subparsers)
     setup_migrate_commands(subparsers)
+    setup_init_command(subparsers)
     setup_view_command(subparsers)
 
     # Check if user wants geo or twin specific help before heavy imports
@@ -749,6 +779,8 @@ def main():
         handle_optuna_dashboard_command(args)
     elif args.command == "migrate":
         handle_migrate_command(args)
+    elif args.command == "init":
+        handle_init_command(args)
     elif args.command == "view":
         handle_view_command(args)
     elif args.command == "geo":

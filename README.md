@@ -30,7 +30,7 @@ The sync step resolves workspace dependencies defined in `pyproject.toml` and pr
 2. **Train latent models** with `frame-twin` to learn diffusion-based digital twins.
 3. **Track data and experiments** with `frame-core` utilities and the unified CLI.
 
-The default data root is `frame_data/`, but you can configure paths via `config/config.toml`.
+The default data root is `~/frame_data`, and core settings live in `~/.frame.toml` (install with `uv run frame init`, template in `config/config.toml`).
 
 ## Packages
 
@@ -140,9 +140,9 @@ Run `uv run frame --help` for the full command tree.
 
 ## Configuration
 
-- Core settings live in `config/config.toml`.
+- Core settings live in `~/.frame.toml` (install with `uv run frame init`, template in `config/config.toml`).
 - Package-specific examples are under `config/`, including `geo_lnp.toml` and `vae_training_config.toml`.
-- Data directories default to `frame_data/libraries/` and `frame_data/experiments/`, each using UUID-based naming for immutability.
+- Data directories default to `~/frame_data/libraries/` and `~/frame_data/experiments/`, each using UUID-based naming for immutability.
 
 ## Development
 
@@ -159,4 +159,3 @@ Scratch work can go in the gitignored `dev/` directory. Avoid editing files unde
 - Contributions should follow modern Python best practices (type hints, tests, docstrings).
 
 Happy modeling!
-
