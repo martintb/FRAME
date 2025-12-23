@@ -434,6 +434,7 @@ class SearchSpaceConfig(BaseModel):
     latent_channels: Optional[SearchSpaceParamConfig] = None
     channel_schedule_type: Optional[SearchSpaceParamConfig] = None  # shallow, medium, deep
     base_channels: Optional[SearchSpaceParamConfig] = None
+    logvar_mode: Optional[SearchSpaceParamConfig] = None  # learned, fixed, scalar
     kl_weight: Optional[SearchSpaceParamConfig] = None
     free_bits: Optional[SearchSpaceParamConfig] = None
     edge_weight: Optional[SearchSpaceParamConfig] = None

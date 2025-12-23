@@ -310,6 +310,9 @@ class OptunaOptimizer:
             channel_schedule = compute_channel_schedule(params)
             model_config_dict['channel_schedule'] = channel_schedule
 
+        if 'logvar_mode' in params:
+            model_config_dict['logvar_mode'] = params['logvar_mode']
+
         if 'kl_weight' in params:
             loss_config_dict['kl_weight'] = params['kl_weight']
 
