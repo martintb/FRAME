@@ -295,3 +295,44 @@ class LibraryManager:
                 shutil.copytree(voxels_path, dest)
                 write_protect_tree(dest)
 
+    def resolve_library_path(self, library_ref: str) -> tuple[Path, str]:
+        """Resolve a library UUID or path to a library path.
+
+        Args:
+            library_ref: Library UUID (lib_*) or direct path
+
+        Returns:
+            Tuple of (path to library, resolved library UUID or empty string)
+        """
+        library_path = Path(library_ref)
+        if library_path.exists():
+            return library_path, ""
+
+        if library_ref.startswith("lib_"):
+            library = self.get_library(library_ref)
+            if library is None:
+                raise FileNotFoundError(f"Library '{library_ref}' not found")
+            return library.path / "voxels.zarr", library_ref
+
+        raise FileNotFoundError(
+            f"Cannot resolve library reference '{library_ref}'. "
+            "Expected: library UUID (lib_*) or valid file path."
+        )
+
+    def resolve_library_from_experiment(
+        self,
+        experiment_uuid: str,
+        trial_uuid: Optional[str] = None,
+    ) -> tuple[Path, str]:
+        """Resolve the primary library for an experiment or trial."""
+        from .experiment import ExperimentManager
+
+        exp_mgr = ExperimentManager()
+        experiment = exp_mgr.get_experiment(experiment_uuid, trial_uuid=trial_uuid)
+        if experiment is None:
+            raise FileNotFoundError(f"Experiment '{experiment_uuid}' not found")
+
+        if not experiment.library_uuid:
+            raise ValueError(f"No library UUID found for experiment '{experiment_uuid}'")
+
+        return self.resolve_library_path(experiment.library_uuid)

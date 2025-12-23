@@ -7,6 +7,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
+try:
+    import tomllib as toml  # Python 3.11+
+except Exception:  # pragma: no cover - fallback for older runtimes
+    import tomli as toml
+
 from ..config import get_config
 from .checkpoint import CheckpointManager, Checkpoint
 from .utils import generate_uuid, timestamp_iso, write_protect
@@ -294,27 +299,90 @@ class ExperimentManager:
         
         return experiments
     
-    def get_experiment(self, uuid: str) -> Optional[Experiment]:
-        """Get experiment by UUID.
-        
+    def get_trial_experiment(self, experiment_uuid: str, trial_uuid: str) -> Optional[Experiment]:
+        """Get a trial experiment under a parent experiment.
+
+        Args:
+            experiment_uuid: Parent experiment UUID
+            trial_uuid: Trial UUID (trial_*)
+
+        Returns:
+            Experiment-like object for the trial or None if not found
+        """
+        parent = self._get_experiment_by_uuid(experiment_uuid)
+        if parent is None:
+            return None
+
+        trial_path = parent.path / "trials" / trial_uuid
+        manifest_path = trial_path / "manifest.json"
+        if not manifest_path.exists():
+            return None
+
+        try:
+            with open(manifest_path, "r") as f:
+                manifest = json.load(f)
+        except Exception:
+            return None
+
+        config_data = self._load_trial_config_data(trial_path, manifest)
+
+        trial_number = manifest.get("trial_number")
+        config_name = (config_data.get("metadata") or {}).get("name")
+        manifest_name = manifest.get("name")
+        if config_name:
+            name = config_name
+        elif manifest_name:
+            name = manifest_name
+        else:
+            suffix = trial_number if trial_number is not None else trial_uuid
+            name = f"{parent.name} trial {suffix}"
+
+        model_type = (config_data.get("model") or {}).get("type") or config_data.get("model_type")
+        if not model_type:
+            model_type = parent.model_type
+
+        library_uuid = (config_data.get("data") or {}).get("library_uuid")
+        if not library_uuid:
+            library_uuid = parent.library_uuid
+        if not library_uuid:
+            library_uuid = self._load_library_uuid_from_refs(parent.path) or ""
+
+        created = manifest.get("created_at") or manifest.get("created") or parent.created
+
+        experiment = Experiment(
+            uuid=trial_uuid,
+            name=name,
+            tags=[],
+            type="trial",
+            model_type=model_type,
+            created=created,
+            library_uuid=library_uuid,
+            status=manifest.get("status", "created"),
+            checkpoints=manifest.get("checkpoints", []),
+            best_checkpoint=manifest.get("best_checkpoint"),
+            dependencies={"parent_experiment": parent.uuid},
+            path=trial_path,
+        )
+        experiment.parent_experiment_uuid = parent.uuid
+        if trial_number is not None:
+            experiment.trial_number = trial_number
+
+        self._refresh_checkpoint_list(experiment)
+        return experiment
+
+    def get_experiment(self, uuid: str, trial_uuid: Optional[str] = None) -> Optional[Experiment]:
+        """Get experiment or trial by UUID.
+
         Args:
             uuid: Experiment UUID
-        
+            trial_uuid: Optional trial UUID (trial_*)
+
         Returns:
             Experiment object or None if not found
         """
-        exp_path = self.config.experiments_path / uuid
-        manifest_path = exp_path / "manifest.json"
-        
-        if not manifest_path.exists():
-            return None
-        
-        experiment = Experiment.from_manifest(manifest_path)
-        
-        # Refresh checkpoint list from actual files
-        self._refresh_checkpoint_list(experiment)
-        
-        return experiment
+        if trial_uuid:
+            return self.get_trial_experiment(uuid, trial_uuid)
+        return self._get_experiment_by_uuid(uuid)
     
     def get_experiment_from_checkpoint(self, checkpoint_uuid: str) -> Optional[Experiment]:
         """Get experiment from a checkpoint UUID.
@@ -330,6 +398,49 @@ class ExperimentManager:
             if checkpoint_uuid in experiment.checkpoints:
                 return experiment
         return None
+
+    def _get_experiment_by_uuid(self, uuid: str) -> Optional[Experiment]:
+        """Get a top-level experiment by UUID."""
+        exp_path = self.config.experiments_path / uuid
+        manifest_path = exp_path / "manifest.json"
+
+        if not manifest_path.exists():
+            return None
+
+        experiment = Experiment.from_manifest(manifest_path)
+
+        # Refresh checkpoint list from actual files
+        self._refresh_checkpoint_list(experiment)
+
+        return experiment
+
+    def _load_trial_config_data(self, trial_path: Path, manifest: dict) -> dict[str, Any]:
+        """Load trial config TOML data if available."""
+        candidate_paths = [trial_path / "config.toml"]
+        manifest_config = manifest.get("config_path")
+        if manifest_config:
+            candidate_paths.append(Path(manifest_config))
+
+        for path in candidate_paths:
+            if path.exists() and path.is_file():
+                try:
+                    with open(path, "rb") as f:
+                        return toml.load(f)
+                except Exception:
+                    continue
+        return {}
+
+    def _load_library_uuid_from_refs(self, experiment_path: Path) -> Optional[str]:
+        """Load primary library UUID from library_refs.json if present."""
+        refs_path = experiment_path / "library_refs.json"
+        if not refs_path.exists():
+            return None
+        try:
+            with open(refs_path, "r") as f:
+                refs = json.load(f)
+            return refs.get("primary")
+        except Exception:
+            return None
     
     def create_experiment(
         self,
@@ -440,4 +551,3 @@ class ExperimentManager:
         except Exception:
             # If refresh fails, leave experiment as-is
             pass
-

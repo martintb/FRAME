@@ -746,12 +746,16 @@ def main():
 
                 # Check if first argument is experiment UUID or checkpoint path
                 exp_or_ckpt = args.experiment_or_checkpoint
+                if getattr(args, "trial_uuid", None) and not exp_or_ckpt.startswith('exp_'):
+                    print("Error: --trial can only be used with an experiment UUID")
+                    sys.exit(1)
                 if exp_or_ckpt.startswith('exp_'):
                     # New mode: experiment UUID
                     twin_cli.validate_vae_from_experiment(
                         experiment_uuid=exp_or_ckpt,
                         structure_id=structure_id,
-                        device=args.device
+                        device=args.device,
+                        trial_uuid=getattr(args, "trial_uuid", None)
                     )
                 else:
                     # Legacy mode: checkpoint path + library path
@@ -775,7 +779,8 @@ def main():
                 twin_cli.sample_prior_from_experiment(
                     experiment_uuid=args.experiment_uuid,
                     device_choice=args.device,
-                    channels_to_show=channels
+                    channels_to_show=channels,
+                    trial_uuid=getattr(args, "trial_uuid", None)
                 )
             elif args.twin_command == "perturb-structure":
                 try:
@@ -798,7 +803,8 @@ def main():
                     device_choice=args.device,
                     num_samples=args.num_samples,
                     sigma=args.sigma,
-                    channels_to_show=channels
+                    channels_to_show=channels,
+                    trial_uuid=getattr(args, "trial_uuid", None)
                 )
             elif args.twin_command == "optimize":
                 twin_cli.optimize_vae(args.config, resume=args.resume)

@@ -4,7 +4,7 @@ Script to load a VAE or UNet-VAE experiment's best checkpoint and generate a str
 from a randomly chosen point in the latent space for immediate napari visualization.
 
 Usage:
-    python scripts/generate_and_view.py <experiment_uuid> [--device DEVICE] [--channels CHANNELS]
+    python scripts/generate_and_view.py <experiment_uuid> [--device DEVICE] [--channels CHANNELS] [--trial TRIAL_UUID]
 
 Example:
     python scripts/generate_and_view.py exp_12345678 --device mps --channels 0,1,2
@@ -29,30 +29,32 @@ from frame_twin.models.unet_vae import UNetVAE
 from frame_twin.config import VAEConfig
 
 
-def load_experiment_and_checkpoint(experiment_uuid: str) -> tuple:
+def load_experiment_and_checkpoint(experiment_uuid: str, trial_uuid: Optional[str] = None) -> tuple:
     """Load experiment and get the best checkpoint.
     
     Args:
         experiment_uuid: UUID of the experiment
+        trial_uuid: Optional trial UUID (trial_*)
         
     Returns:
         Tuple of (experiment, checkpoint, checkpoint_data)
     """
-    print(f"Loading experiment {experiment_uuid}...")
+    label = f"{experiment_uuid} (trial {trial_uuid})" if trial_uuid else experiment_uuid
+    print(f"Loading experiment {label}...")
     
     # Load experiment
     exp_mgr = ExperimentManager()
-    experiment = exp_mgr.get_experiment(experiment_uuid)
+    experiment = exp_mgr.get_experiment(experiment_uuid, trial_uuid=trial_uuid)
     
     if experiment is None:
-        raise ValueError(f"Experiment {experiment_uuid} not found")
+        raise ValueError(f"Experiment {label} not found")
     
     print(f"Found experiment: {experiment.name} ({experiment.model_type})")
     print(f"Status: {experiment.status}")
     
     # Get best checkpoint
     if not experiment.best_checkpoint:
-        raise ValueError(f"Experiment {experiment_uuid} has no best checkpoint set. "
+        raise ValueError(f"Experiment {label} has no best checkpoint set. "
                         f"Use 'frame checkpoint set-best' to mark one.")
     
     ckpt_mgr = CheckpointManager()
@@ -265,6 +267,12 @@ def main():
         help="UUID of the experiment to load (e.g., exp_12345678)"
     )
     parser.add_argument(
+        "--trial",
+        dest="trial_uuid",
+        default=None,
+        help="Optional trial UUID (trial_*)"
+    )
+    parser.add_argument(
         "--device",
         default="auto",
         choices=["auto", "cpu", "cuda", "mps"],
@@ -302,7 +310,10 @@ def main():
     
     try:
         # Load experiment and checkpoint
-        experiment, checkpoint, checkpoint_data = load_experiment_and_checkpoint(args.experiment_uuid)
+        experiment, checkpoint, checkpoint_data = load_experiment_and_checkpoint(
+            args.experiment_uuid,
+            trial_uuid=args.trial_uuid
+        )
 
         # Create and load model
         model = create_model_from_checkpoint(experiment, checkpoint_data, device)

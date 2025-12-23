@@ -38,31 +38,9 @@ def _resolve_library_path(library_ref: str) -> tuple[Path, str]:
         FileNotFoundError: If library cannot be resolved
     """
     from frame.management import LibraryManager
-    from frame.config import get_config
-    
-    # If it's already a valid path, return it with empty UUID
-    library_path = Path(library_ref)
-    if library_path.exists():
-        return library_path, ""
-    
-    # Try to resolve as library UUID
-    if library_ref.startswith('lib_'):
-        config = get_config()
-        lib_mgr = LibraryManager()
-        library = lib_mgr.get_library(library_ref)
-        
-        if library is None:
-            raise FileNotFoundError(
-                f"Library '{library_ref}' not found in {config.libraries_path}"
-            )
-        
-    return library.path / "voxels.zarr", library_ref
-    
-    # If we get here, it's neither a valid path nor a recognized UUID
-    raise FileNotFoundError(
-        f"Cannot resolve library reference '{library_ref}'. "
-        f"Expected: library UUID (lib_*) or valid file path."
-    )
+
+    lib_mgr = LibraryManager()
+    return lib_mgr.resolve_library_path(library_ref)
 
 
 def register_subcommands(subparsers):
@@ -100,6 +78,7 @@ def register_subcommands(subparsers):
     validate_vae_parser.add_argument('--structure-id', type=int, default=None, help='Structure ID to validate (default: random)')
     validate_vae_parser.add_argument('--random', action='store_true', help='Use random structure ID (default behavior)')
     validate_vae_parser.add_argument('--device', default='auto', help='Device to use (auto, cpu, cuda, mps)')
+    validate_vae_parser.add_argument('--trial', dest='trial_uuid', default=None, help='Optional trial UUID (trial_*)')
 
     # Sample from prior command
     sample_prior_parser = twin_subparsers.add_parser(
@@ -110,6 +89,7 @@ def register_subcommands(subparsers):
         '--device', default='auto', choices=['auto', 'cpu', 'cuda', 'mps'],
         help='Device to use for sampling (default: auto)'
     )
+    sample_prior_parser.add_argument('--trial', dest='trial_uuid', default=None, help='Optional trial UUID (trial_*)')
     sample_prior_parser.add_argument(
         '--channels', type=str,
         help="Optional comma-separated channel indices to visualize (e.g., '0,1,2')"
@@ -133,6 +113,7 @@ def register_subcommands(subparsers):
         choices=['auto', 'cpu', 'cuda', 'mps'],
         help='Device to use for encoding/decoding (default: auto)'
     )
+    perturb_parser.add_argument('--trial', dest='trial_uuid', default=None, help='Optional trial UUID (trial_*)')
     perturb_parser.add_argument(
         '--num-samples', type=int, default=3,
         help='Number of perturbed latent samples to decode (default: 3)'
@@ -192,6 +173,7 @@ def main():
     validate_vae_parser.add_argument('--random', action='store_true', help='Use random structure ID (default behavior)')
     # Note: channel, all-channels, and slicing-mode arguments removed since we now show all channels by default
     validate_vae_parser.add_argument('--device', default='auto', help='Device to use (auto, cpu, cuda, mps)')
+    validate_vae_parser.add_argument('--trial', dest='trial_uuid', default=None, help='Optional trial UUID (trial_*)')
 
     # Sample from prior command
     sample_prior_parser = subparsers.add_parser(
@@ -202,6 +184,7 @@ def main():
         '--device', default='auto', choices=['auto', 'cpu', 'cuda', 'mps'],
         help='Device to use for sampling (default: auto)'
     )
+    sample_prior_parser.add_argument('--trial', dest='trial_uuid', default=None, help='Optional trial UUID (trial_*)')
     sample_prior_parser.add_argument(
         '--channels', type=str,
         help="Optional comma-separated channel indices to visualize (e.g., '0,1,2')"
@@ -225,6 +208,7 @@ def main():
         choices=['auto', 'cpu', 'cuda', 'mps'],
         help='Device to use for encoding/decoding (default: auto)'
     )
+    perturb_parser.add_argument('--trial', dest='trial_uuid', default=None, help='Optional trial UUID (trial_*)')
     perturb_parser.add_argument(
         '--num-samples', type=int, default=3,
         help='Number of perturbed latent samples to decode (default: 3)'
@@ -270,12 +254,16 @@ def main():
 
         # Check if first argument is experiment UUID or checkpoint path
         exp_or_ckpt = args.experiment_or_checkpoint
+        if args.trial_uuid and not exp_or_ckpt.startswith('exp_'):
+            print("Error: --trial can only be used with an experiment UUID")
+            sys.exit(1)
         if exp_or_ckpt.startswith('exp_'):
             # New mode: experiment UUID
             validate_vae_from_experiment(
                 experiment_uuid=exp_or_ckpt,
                 structure_id=structure_id,
-                device=args.device
+                device=args.device,
+                trial_uuid=args.trial_uuid
             )
         else:
             # Legacy mode: checkpoint path + library path
@@ -297,7 +285,8 @@ def main():
         sample_prior_from_experiment(
             experiment_uuid=args.experiment_uuid,
             device_choice=args.device,
-            channels_to_show=channels
+            channels_to_show=channels,
+            trial_uuid=args.trial_uuid
         )
     elif args.command == 'perturb-structure':
         try:
@@ -320,7 +309,8 @@ def main():
             device_choice=args.device,
             num_samples=args.num_samples,
             sigma=args.sigma,
-            channels_to_show=channels
+            channels_to_show=channels,
+            trial_uuid=args.trial_uuid
         )
     elif args.command == 'optimize':
         optimize_vae(args.config, resume=args.resume)
@@ -1213,22 +1203,23 @@ def _determine_device(device_choice: str) -> torch.device:
     return device
 
 
-def _load_experiment_and_checkpoint(experiment_uuid: str):
+def _load_experiment_and_checkpoint(experiment_uuid: str, trial_uuid: Optional[str] = None):
     """Load experiment metadata and its best checkpoint."""
     from frame.management import ExperimentManager, CheckpointManager
 
-    print(f"Loading experiment {experiment_uuid}...")
+    label = f"{experiment_uuid} (trial {trial_uuid})" if trial_uuid else experiment_uuid
+    print(f"Loading experiment {label}...")
     exp_mgr = ExperimentManager()
-    experiment = exp_mgr.get_experiment(experiment_uuid)
+    experiment = exp_mgr.get_experiment(experiment_uuid, trial_uuid=trial_uuid)
     if experiment is None:
-        raise ValueError(f"Experiment {experiment_uuid} not found")
+        raise ValueError(f"Experiment {label} not found")
 
     print(f"Found experiment: {experiment.name} ({experiment.model_type})")
     print(f"Status: {experiment.status}")
 
     if not experiment.best_checkpoint:
         raise ValueError(
-            f"Experiment {experiment_uuid} has no best checkpoint set. "
+            f"Experiment {label} has no best checkpoint set. "
             "Use 'frame checkpoint set-best' to mark one."
         )
 
@@ -1482,10 +1473,14 @@ def _generate_prior_sample_voxel(
 def sample_prior_from_experiment(
     experiment_uuid: str,
     device_choice: str = 'auto',
-    channels_to_show: Optional[List[int]] = None
+    channels_to_show: Optional[List[int]] = None,
+    trial_uuid: Optional[str] = None
 ) -> None:
     """CLI entry: sample from latent prior and visualize in napari."""
-    experiment, checkpoint, checkpoint_data = _load_experiment_and_checkpoint(experiment_uuid)
+    experiment, checkpoint, checkpoint_data = _load_experiment_and_checkpoint(
+        experiment_uuid,
+        trial_uuid=trial_uuid
+    )
     if experiment.model_type not in {'vae', 'unet_vae', 'hvae', 'vp_hvae'}:
         raise ValueError(f"Experiment {experiment_uuid} is not a VAE/UNet-VAE/HVAE/VP-HVAE (got {experiment.model_type})")
 
@@ -1515,20 +1510,24 @@ def sample_prior_from_experiment(
 
 def _load_primary_library_from_experiment(experiment) -> VoxelLibrary:
     """Load primary voxel library associated with experiment."""
-    import json
+    from frame.management import LibraryManager
 
-    library_refs_path = experiment.path / "library_refs.json"
-    if not library_refs_path.exists():
-        raise FileNotFoundError(f"Library references not found at {library_refs_path}")
-
-    with open(library_refs_path, 'r') as f:
-        library_refs = json.load(f)
-
-    library_uuid = library_refs.get('primary')
+    library_uuid = getattr(experiment, "library_uuid", None)
     if not library_uuid:
-        raise ValueError(f"No primary library reference found in {library_refs_path}")
+        library_refs_path = experiment.path / "library_refs.json"
+        if library_refs_path.exists():
+            try:
+                import json
+                with open(library_refs_path, "r") as f:
+                    library_refs = json.load(f)
+                library_uuid = library_refs.get("primary")
+            except Exception:
+                library_uuid = None
+    if not library_uuid:
+        raise ValueError("No library UUID found for experiment")
 
-    library_path, _ = _resolve_library_path(library_uuid)
+    lib_mgr = LibraryManager()
+    library_path, _ = lib_mgr.resolve_library_path(library_uuid)
     print(f"Using library: {library_uuid}")
     print(f"Library path: {library_path}")
     return VoxelLibrary(library_path)
@@ -1604,10 +1603,14 @@ def perturb_structure_from_experiment(
     device_choice: str = 'auto',
     num_samples: int = 3,
     sigma: float = 0.4,
-    channels_to_show: Optional[List[int]] = None
+    channels_to_show: Optional[List[int]] = None,
+    trial_uuid: Optional[str] = None
 ) -> None:
     """CLI entry: encode structure, perturb latent, decode and visualize."""
-    experiment, checkpoint, checkpoint_data = _load_experiment_and_checkpoint(experiment_uuid)
+    experiment, checkpoint, checkpoint_data = _load_experiment_and_checkpoint(
+        experiment_uuid,
+        trial_uuid=trial_uuid
+    )
     if experiment.model_type not in {'vae', 'unet_vae', 'hvae'}:
         raise ValueError(f"Experiment {experiment_uuid} is not a VAE/UNet-VAE/HVAE (got {experiment.model_type})")
 
@@ -1704,67 +1707,27 @@ def perturb_structure_from_experiment(
 def validate_vae_from_experiment(
     experiment_uuid: str,
     structure_id = 0,  # Can be int or 'random'
-    device: str = 'auto'
+    device: str = 'auto',
+    trial_uuid: Optional[str] = None
 ):
     """Validate VAE reconstruction using experiment UUID (infers checkpoint and library).
 
     Args:
         experiment_uuid: UUID of the experiment
+        trial_uuid: Optional trial UUID (trial_*)
         structure_id: Structure ID to validate (int or 'random')
         device: Device to use ('auto', 'cpu', 'cuda', 'mps')
     """
-    from frame.management import ExperimentManager
-    import json
-
-    print(f"Loading experiment {experiment_uuid}...")
-
-    # Load experiment
-    exp_mgr = ExperimentManager()
-    experiment = exp_mgr.get_experiment(experiment_uuid)
-
-    if experiment is None:
-        print(f"Error: Experiment {experiment_uuid} not found")
+    try:
+        experiment, checkpoint, _ = _load_experiment_and_checkpoint(
+            experiment_uuid,
+            trial_uuid=trial_uuid
+        )
+    except ValueError as exc:
+        print(f"Error: {exc}")
         sys.exit(1)
 
-    print(f"Found experiment: {experiment.name} ({experiment.model_type})")
-
-    # Get best checkpoint
-    if not experiment.best_checkpoint:
-        print(f"Error: Experiment {experiment_uuid} has no best checkpoint set.")
-        print("Use 'frame checkpoint set-best' to mark one.")
-        sys.exit(1)
-
-    from frame.management import CheckpointManager
-    ckpt_mgr = CheckpointManager()
-    checkpoint = ckpt_mgr.get_checkpoint(experiment.path, experiment.best_checkpoint)
-
-    if checkpoint is None:
-        print(f"Error: Best checkpoint {experiment.best_checkpoint} not found")
-        sys.exit(1)
-
-    print(f"Using best checkpoint: {checkpoint.uuid}")
-    print(f"  Epoch: {checkpoint.epoch}, Step: {checkpoint.step}")
-    print(f"  Metrics: {checkpoint.metrics}")
-
-    # Get library UUID from experiment
-    library_refs_path = experiment.path / "library_refs.json"
-    if not library_refs_path.exists():
-        print(f"Error: Library references not found at {library_refs_path}")
-        sys.exit(1)
-
-    with open(library_refs_path, 'r') as f:
-        library_refs = json.load(f)
-
-    library_uuid = library_refs.get('primary')
-    if not library_uuid:
-        print(f"Error: No primary library reference found in {library_refs_path}")
-        sys.exit(1)
-
-    print(f"Using library: {library_uuid}")
-
-    # Resolve library path
-    library_path, _ = _resolve_library_path(library_uuid)
-    print(f"Library path: {library_path}")
+    library_path = _load_primary_library_from_experiment(experiment).path
 
     # Call the existing validation function
     validate_vae_reconstruction(

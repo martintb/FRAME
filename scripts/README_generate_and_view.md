@@ -11,6 +11,7 @@ uv run python scripts/generate_and_view.py <experiment_uuid> [OPTIONS]
 ## Arguments
 
 - `experiment_uuid`: UUID of the experiment (e.g., `exp_1d21f317237c`)
+- `--trial`: Optional trial UUID (e.g., `trial_1a2b3c4d5e6f`)
 - `--device`: Device to use (`auto`, `cpu`, `cuda`, or `mps`). Default: `auto`
 - `--channels`: Comma-separated channel indices to show (e.g., `0,1,2`). Default: show all
 
@@ -25,6 +26,9 @@ uv run python scripts/generate_and_view.py exp_1d21f317237c --device mps
 
 # Show only specific channels
 uv run python scripts/generate_and_view.py exp_1d21f317237c --channels 0,1,2,3
+
+# Use a specific trial under an experiment
+uv run python scripts/generate_and_view.py exp_1d21f317237c --trial trial_abcdef123456
 ```
 
 ## How It Works
