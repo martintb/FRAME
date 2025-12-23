@@ -49,7 +49,7 @@ class OptunaOptimizer:
         self.parent_experiment = self._create_parent_experiment()
 
         # Create Optuna study
-        storage_path = self._get_storage_path(parent_experiment_path=experiment.path)
+        storage_path = self._get_storage_path(parent_experiment_path=self.parent_experiment.path)
         directions = get_optuna_directions(self.config.objectives)
 
         # Create pruner
