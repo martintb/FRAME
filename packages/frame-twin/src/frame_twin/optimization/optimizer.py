@@ -67,9 +67,11 @@ class OptunaOptimizer:
             sampler=sampler,
             pruner=pruner,
             directions=directions,
-            metric_names=objective_names,
             load_if_exists=resume
         )
+
+        # Set metric names for multi-objective optimization
+        self.study.set_metric_names(objective_names)
 
         # Store study metadata for dashboard and future reference
         self.study.set_user_attr('objective_names', objective_names)
