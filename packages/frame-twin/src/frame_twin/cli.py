@@ -511,7 +511,10 @@ def train_vae_with_checkpoint(config_path: str, experiment, checkpoint_path: str
 def train_ddpm(config_path: str):
     """Train DDPM model."""
     from frame.management import ExperimentManager
-    
+    from frame.storage import VoxelLibrary
+    from .config import DDPMConfig
+    from .data import create_data_splits, create_data_loaders
+
     print(f"Loading DDPM config from {config_path}")
     config = DDPMConfig.from_toml(config_path)
     
@@ -586,6 +589,10 @@ def train_ddpm(config_path: str):
 
 def train_ddpm_with_checkpoint(config_path: str, experiment, checkpoint_path: str):
     """Train DDPM model resuming from a checkpoint."""
+    from frame.storage import VoxelLibrary
+    from .config import DDPMConfig
+    from .data import create_data_splits, create_data_loaders
+
     print(f"Loading DDPM config from {config_path}")
     config = DDPMConfig.from_toml(config_path)
     
@@ -712,13 +719,14 @@ def evaluate_model(config_path: str, checkpoint_path: str):
 
 def continue_training(experiment_uuid: str, config_path: Optional[str] = None):
     """Continue training from an experiment's latest checkpoint.
-    
+
     Args:
         experiment_uuid: UUID of the experiment to continue
         config_path: Optional path to updated config file
     """
     from frame.management import ExperimentManager, CheckpointManager
-    
+    from .config import VAEConfig, DDPMConfig
+
     print("\n" + "="*80)
     print("CONTINUING TRAINING FROM EXISTING EXPERIMENT")
     print("="*80)
@@ -1621,6 +1629,7 @@ def perturb_structure_from_experiment(
     """CLI entry: encode structure, perturb latent, decode and visualize."""
     import torch
     from frame.visualize_napari import NapariViewer
+    from frame.voxel_grid import VoxelGrid
 
     experiment, checkpoint, checkpoint_data = _load_experiment_and_checkpoint(
         experiment_uuid,
