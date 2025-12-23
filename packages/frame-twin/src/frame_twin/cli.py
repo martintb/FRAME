@@ -655,9 +655,12 @@ def train_ddpm_with_checkpoint(config_path: str, experiment, checkpoint_path: st
 
 def generate_structures(config_path: str):
     """Generate structures using trained models."""
+    import torch
+    from .config import InferenceConfig
+
     print(f"Loading inference config from {config_path}")
     config = InferenceConfig.from_toml(config_path)
-    
+
     # Determine device
     device_str = config.sampling.device
     if device_str == 'auto':
@@ -1395,8 +1398,10 @@ def _infer_latent_size(experiment, checkpoint_data, model) -> int:
     return latent_size
 
 
-def _apply_activation(tensor: torch.Tensor, reconstruction_type: str) -> torch.Tensor:
+def _apply_activation(tensor, reconstruction_type: str):
     """Map logits to data space based on reconstruction type."""
+    import torch
+
     if reconstruction_type == 'fractional_ce':
         activated = torch.softmax(tensor, dim=1)
         print("  Applied softmax activation (fractional_ce)")
@@ -1573,10 +1578,12 @@ def _select_structure_index(voxel_library: VoxelLibrary, structure_id) -> int:
 
 
 def _filter_voxel_grid_channels(
-    voxel_grid: VoxelGrid,
+    voxel_grid,
     channels_to_show: Optional[List[int]]
-) -> VoxelGrid:
+):
     """Return voxel grid limited to selected channels."""
+    from frame.voxel_grid import VoxelGrid
+
     if channels_to_show is None:
         return voxel_grid
 
