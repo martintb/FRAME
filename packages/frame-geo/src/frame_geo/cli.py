@@ -6,14 +6,6 @@ from pathlib import Path
 import shutil
 from typing import Dict, Any, List
 
-import numpy as np
-
-from .config import FrameGeoConfig, GridConfig
-from .generator import StructureGenerator
-from .registry import list_structure_types, get_structure_builder
-from .voxelization.hybrid import HybridVoxelizer
-from .structures.lnp import LNPBuilder, LNPParameters
-
 
 def register_subcommands(subparsers):
     """Register frame-geo subcommands with the main frame CLI.
@@ -205,6 +197,9 @@ def main():
 
 def generate_command(args):
     """Execute generate command."""
+    from .config import FrameGeoConfig
+    from .generator import StructureGenerator
+
     try:
         config = FrameGeoConfig.from_toml(args.config)
         config.validate()
@@ -238,6 +233,8 @@ def generate_command(args):
 
 def validate_config_command(args):
     """Execute validate-config command."""
+    from .config import FrameGeoConfig
+
     try:
         config = FrameGeoConfig.from_toml(args.config)
         config.validate()
@@ -260,6 +257,8 @@ def validate_config_command(args):
 
 def list_types_command():
     """Execute list-types command."""
+    from .registry import list_structure_types
+
     types = list_structure_types()
     print("Available structure types:")
     for type_name in types:
@@ -537,20 +536,23 @@ def voxelize_command(args):
         from tqdm import tqdm
         from frame.storage import VoxelLibraryWriter
         from frame.voxel_grid import VoxelGrid
-        
+        from .config import FrameGeoConfig, GridConfig
+        from .voxelization.hybrid import HybridVoxelizer
+        from .registry import get_structure_builder
+
         structures_path = Path(args.structures_path)
         output_path = Path(args.output_path)
-        
+
         if not structures_path.exists():
             print(f"Error: Structures path not found: {structures_path}", file=sys.stderr)
             sys.exit(1)
-        
+
         # Check if output directory exists
         if output_path.exists() and not args.overwrite:
             print(f"Error: Output directory already exists: {output_path}", file=sys.stderr)
             print("Use --overwrite to replace existing directory", file=sys.stderr)
             sys.exit(1)
-        
+
         # Load configuration if provided
         if args.config:
             config = FrameGeoConfig.from_toml(args.config)

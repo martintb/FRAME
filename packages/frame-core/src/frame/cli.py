@@ -640,6 +640,31 @@ def handle_view_command(args):
 
 def main():
     """Main CLI entry point."""
+    # Early help check - avoid loading heavy plugins for basic help
+    if len(sys.argv) == 1 or (len(sys.argv) == 2 and sys.argv[1] in ('--help', '-h')):
+        parser = argparse.ArgumentParser(
+            prog="frame",
+            description="FRAME: Framework for Refining Analysis through Materials digital twins"
+        )
+        subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+        # Core commands (lightweight setup)
+        setup_library_commands(subparsers)
+        setup_experiment_commands(subparsers)
+        setup_checkpoint_commands(subparsers)
+        setup_tensorboard_command(subparsers)
+        setup_optuna_dashboard_command(subparsers)
+        setup_migrate_commands(subparsers)
+        setup_view_command(subparsers)
+
+        # Lightweight plugin stubs for help text
+        subparsers.add_parser("geo", help="Geometry generation (frame-geo)")
+        subparsers.add_parser("twin", help="Digital twin training and inference (frame-twin)")
+
+        parser.print_help()
+        sys.exit(0)
+
+    # Normal flow - full parser with plugin registration
     parser = argparse.ArgumentParser(
         prog="frame",
         description="FRAME: Framework for Refining Analysis through Materials digital twins"
@@ -655,30 +680,56 @@ def main():
     setup_optuna_dashboard_command(subparsers)
     setup_migrate_commands(subparsers)
     setup_view_command(subparsers)
-    
-    # Try to import and register sub-package CLIs
-    try:
-        from frame_geo import cli as geo_cli
-        if hasattr(geo_cli, "register_subcommands"):
-            geo_cli.register_subcommands(subparsers)
+
+    # Check if user wants geo or twin specific help before heavy imports
+    if len(sys.argv) >= 2 and sys.argv[1] in ('geo', 'twin'):
+        if len(sys.argv) == 2 or (len(sys.argv) == 3 and sys.argv[2] in ('--help', '-h')):
+            # User wants plugin help - need to import to show subcommands
+            if sys.argv[1] == 'geo':
+                try:
+                    from frame_geo import cli as geo_cli
+                    if hasattr(geo_cli, "register_subcommands"):
+                        geo_cli.register_subcommands(subparsers)
+                    else:
+                        subparsers.add_parser("geo", help="Geometry generation (frame-geo)")
+                except ImportError:
+                    subparsers.add_parser("geo", help="Geometry generation (frame-geo) [not installed]")
+            elif sys.argv[1] == 'twin':
+                try:
+                    from frame_twin import cli as twin_cli
+                    if hasattr(twin_cli, "register_subcommands"):
+                        twin_cli.register_subcommands(subparsers)
+                    else:
+                        subparsers.add_parser("twin", help="Digital twin (frame-twin)")
+                except ImportError:
+                    subparsers.add_parser("twin", help="Digital twin (frame-twin) [not installed]")
+            args = parser.parse_args()
+            if not args.command or (hasattr(args, 'geo_command') and not args.geo_command) or (hasattr(args, 'twin_command') and not args.twin_command):
+                parser.print_help()
+                sys.exit(0)
         else:
-            # Fallback: create geo subcommand that calls frame-geo CLI
-            geo_parser = subparsers.add_parser("geo", help="Geometry generation (frame-geo)")
-            geo_parser.add_argument("geo_args", nargs=argparse.REMAINDER, help="Arguments for frame-geo")
-    except ImportError:
-        pass
-    
-    try:
-        from frame_twin import cli as twin_cli
-        if hasattr(twin_cli, "register_subcommands"):
-            twin_cli.register_subcommands(subparsers)
-        else:
-            # Fallback: create twin subcommand
-            twin_parser = subparsers.add_parser("twin", help="Digital twin (frame-twin)")
-            twin_parser.add_argument("twin_args", nargs=argparse.REMAINDER, help="Arguments for frame-twin")
-    except ImportError:
-        pass
-    
+            # User wants to run a specific subcommand - lazy load only the needed plugin
+            if sys.argv[1] == 'geo':
+                try:
+                    from frame_geo import cli as geo_cli
+                    if hasattr(geo_cli, "register_subcommands"):
+                        geo_cli.register_subcommands(subparsers)
+                except ImportError:
+                    print("Error: frame-geo is not installed")
+                    sys.exit(1)
+            elif sys.argv[1] == 'twin':
+                try:
+                    from frame_twin import cli as twin_cli
+                    if hasattr(twin_cli, "register_subcommands"):
+                        twin_cli.register_subcommands(subparsers)
+                except ImportError:
+                    print("Error: frame-twin is not installed")
+                    sys.exit(1)
+    else:
+        # Not a geo/twin command - use lightweight stubs
+        subparsers.add_parser("geo", help="Geometry generation (frame-geo)")
+        subparsers.add_parser("twin", help="Digital twin training and inference (frame-twin)")
+
     args = parser.parse_args()
     
     if not args.command:

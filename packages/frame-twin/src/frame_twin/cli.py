@@ -1,24 +1,11 @@
 """CLI interface for frame-twin."""
 
+from __future__ import annotations
+
 import argparse
 import sys
 from pathlib import Path
 from typing import Optional, List
-import torch
-try:
-    import tomllib as toml  # Python 3.11+
-except Exception:  # pragma: no cover - fallback for older runtimes
-    import tomli as toml
-
-from .config import VAEConfig, DDPMConfig, InferenceConfig
-from .training import VAETrainer
-from .data import create_data_splits, create_data_loaders
-from frame.storage import VoxelLibrary
-from frame.voxel_grid import VoxelGrid
-from frame.visualize_napari import NapariViewer
-
-from .models.hvae import HVAE
-import torch.nn.functional as F
 
 
 def _resolve_library_path(library_ref: str) -> tuple[Path, str]:
@@ -321,8 +308,13 @@ def main():
 
 def train(config_path: str):
     """Unified training dispatcher based on model type."""
+    try:
+        import tomllib as toml  # Python 3.11+
+    except Exception:
+        import tomli as toml
+
     print(f"Loading config from {config_path}")
-    
+
     # Read config to determine model type
     with open(config_path, 'rb') as f:
         config_data = toml.load(f)
@@ -348,7 +340,12 @@ def train_vae(config_path: str, epoch_callback=None):
     Returns:
         Experiment object
     """
+    import torch
     from frame.management import ExperimentManager
+    from frame.storage import VoxelLibrary
+    from .config import VAEConfig
+    from .training import VAETrainer
+    from .data import create_data_splits, create_data_loaders
 
     print(f"Loading VAE config from {config_path}")
     config = VAEConfig.from_toml(config_path)
@@ -1188,8 +1185,10 @@ def _parse_channels_arg(channels: Optional[str]) -> Optional[List[int]]:
     return parsed
 
 
-def _determine_device(device_choice: str) -> torch.device:
+def _determine_device(device_choice: str):
     """Resolve device string to torch.device with auto detection."""
+    import torch
+
     if device_choice == 'auto':
         if torch.cuda.is_available():
             device = torch.device('cuda')
@@ -1205,6 +1204,7 @@ def _determine_device(device_choice: str) -> torch.device:
 
 def _load_experiment_and_checkpoint(experiment_uuid: str, trial_uuid: Optional[str] = None):
     """Load experiment metadata and its best checkpoint."""
+    import torch
     from frame.management import ExperimentManager, CheckpointManager
 
     label = f"{experiment_uuid} (trial {trial_uuid})" if trial_uuid else experiment_uuid
@@ -1423,13 +1423,15 @@ def _validate_channel_indices(indices: Optional[List[int]], n_channels: int) -> 
 
 def _generate_prior_sample_voxel(
     model,
-    device: torch.device,
+    device,
     reconstruction_type: str,
     latent_size: int,
     channels_to_show: Optional[List[int]]
-) -> VoxelGrid:
+):
     """Sample latent prior and return VoxelGrid."""
-    from .models import VpHVAE
+    import torch
+    from frame.voxel_grid import VoxelGrid
+    from .models import VpHVAE, HVAE
 
     with torch.no_grad():
         if isinstance(model, HVAE):
@@ -1477,6 +1479,8 @@ def sample_prior_from_experiment(
     trial_uuid: Optional[str] = None
 ) -> None:
     """CLI entry: sample from latent prior and visualize in napari."""
+    from frame.visualize_napari import NapariViewer
+
     experiment, checkpoint, checkpoint_data = _load_experiment_and_checkpoint(
         experiment_uuid,
         trial_uuid=trial_uuid
@@ -1508,8 +1512,9 @@ def sample_prior_from_experiment(
     napari.run()
 
 
-def _load_primary_library_from_experiment(experiment) -> VoxelLibrary:
+def _load_primary_library_from_experiment(experiment):
     """Load primary voxel library associated with experiment."""
+    from frame.storage import VoxelLibrary
     from frame.management import LibraryManager
 
     library_uuid = getattr(experiment, "library_uuid", None)
@@ -1607,6 +1612,9 @@ def perturb_structure_from_experiment(
     trial_uuid: Optional[str] = None
 ) -> None:
     """CLI entry: encode structure, perturb latent, decode and visualize."""
+    import torch
+    from frame.visualize_napari import NapariViewer
+
     experiment, checkpoint, checkpoint_data = _load_experiment_and_checkpoint(
         experiment_uuid,
         trial_uuid=trial_uuid
@@ -1745,9 +1753,18 @@ def validate_vae_reconstruction(
     device: str = 'auto'
 ):
     """Validate VAE reconstruction with two separate napari windows."""
+    import torch
+    try:
+        import tomllib as toml  # Python 3.11+
+    except Exception:
+        import tomli as toml
+    from frame.storage import VoxelLibrary
+    from frame.visualize_napari import NapariViewer
+    from .models import VAE, UNetVAE
+
     print(f"Loading VAE checkpoint from {checkpoint_path}")
     print(f"Loading voxel library from {voxel_library_path}")
-    
+
     # Load voxel library first to get the size
     voxel_library = VoxelLibrary(voxel_library_path)
     num_structures = len(voxel_library)
