@@ -49,7 +49,7 @@ class OptunaOptimizer:
         self.parent_experiment = self._create_parent_experiment()
 
         # Create Optuna study
-        storage_path = self._get_storage_path()
+        storage_path = self._get_storage_path(parent_experiment_path=experiment.path)
         directions = get_optuna_directions(self.config.objectives)
 
         # Create pruner
@@ -197,13 +197,16 @@ class OptunaOptimizer:
 
         return experiment
 
-    def _get_storage_path(self) -> Path:
+    def _get_storage_path(self, parent_experiment_path: Optional[Path] = None) -> Path:
         """Get path for Optuna SQLite database."""
         if self.config.optuna.storage:
             return Path(self.config.optuna.storage)
-        else:
-            # Store in parent experiment directory
-            return self.parent_experiment.path / "optuna_study.db"
+        if parent_experiment_path is None:
+            if self.parent_experiment is None:
+                raise ValueError("Parent experiment not initialized for Optuna storage path.")
+            parent_experiment_path = self.parent_experiment.path
+        # Store in parent experiment directory
+        return parent_experiment_path / "optuna_study.db"
 
     def _create_sampler(self) -> optuna.samplers.BaseSampler:
         """Create Optuna sampler."""
