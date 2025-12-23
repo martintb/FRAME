@@ -184,7 +184,7 @@ class OptunaOptimizer:
         trials_dir.mkdir(exist_ok=True)
 
         # Store optuna database path in experiment manifest
-        storage_path = self._get_storage_path()
+        storage_path = self._get_storage_path(parent_experiment_path=experiment.path)
         manifest_path = experiment.path / "manifest.json"
         with open(manifest_path, 'r') as f:
             manifest = json.load(f)
