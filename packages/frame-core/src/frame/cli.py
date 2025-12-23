@@ -1,6 +1,7 @@
 """Unified CLI for FRAME framework."""
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from typing import Optional
@@ -104,6 +105,14 @@ def setup_tensorboard_command(subparsers):
     tb_parser.add_argument("--port", type=int, default=6006, help="TensorBoard port (default: 6006)")
     tb_parser.add_argument("--bind-all", action="store_true", help="Bind to all network interfaces (0.0.0.0)")
     tb_parser.add_argument("--all", action="store_true", help="Show all experiments (root experiments directory)")
+
+
+def setup_optuna_dashboard_command(subparsers):
+    """Set up optuna-dashboard launcher."""
+    od_parser = subparsers.add_parser("optuna-dashboard", help="Launch Optuna Dashboard for optimization study")
+    od_parser.add_argument("experiment_uuid", nargs="?", default=None, help="Optimization experiment UUID (optional, defaults to last optimization)")
+    od_parser.add_argument("--port", type=int, default=8080, help="Dashboard port (default: 8080)")
+    od_parser.add_argument("--bind-all", action="store_true", help="Bind to all network interfaces (0.0.0.0)")
 
 
 def setup_migrate_commands(subparsers):
@@ -446,6 +455,98 @@ def handle_tensorboard_command(args):
         print("\nTensorBoard stopped")
 
 
+def handle_optuna_dashboard_command(args):
+    """Handle optuna-dashboard launcher."""
+    import subprocess
+    from .config import get_config
+
+    config = get_config()
+    exp_mgr = ExperimentManager()
+
+    if args.experiment_uuid:
+        experiment = exp_mgr.get_experiment(args.experiment_uuid)
+        if not experiment:
+            print(f"Experiment {args.experiment_uuid} not found")
+            sys.exit(1)
+
+        if 'optimization' not in experiment.tags and 'optuna' not in experiment.tags:
+            print(f"Warning: Experiment {experiment.name} doesn't appear to be an optimization study")
+            print(f"Tags: {experiment.tags}")
+            response = input("Continue anyway? [y/N] ")
+            if response.lower() != 'y':
+                sys.exit(1)
+    else:
+        experiments = exp_mgr.list_experiments()
+        opt_experiments = [exp for exp in experiments if 'optimization' in exp.tags or 'optuna' in exp.tags]
+
+        if not opt_experiments:
+            print("No optimization experiments found. Please specify an experiment UUID.")
+            print("Use 'frame experiment list --tag optimization' to see optimization experiments")
+            sys.exit(1)
+
+        opt_experiments.sort(key=lambda e: e.created, reverse=True)
+        experiment = opt_experiments[0]
+        print(f"Using most recent optimization experiment: {experiment.name}")
+
+    manifest_path = experiment.path / "manifest.json"
+    if not manifest_path.exists():
+        print(f"Experiment manifest not found: {manifest_path}")
+        sys.exit(1)
+
+    with open(manifest_path, 'r') as f:
+        manifest = json.load(f)
+
+    optuna_db_path = manifest.get('optuna_study_db')
+    if not optuna_db_path:
+        optuna_db_path = experiment.path / "optuna_study.db"
+        if not optuna_db_path.exists():
+            print(f"No Optuna study database found for experiment {experiment.name}")
+            print(f"Expected location: {optuna_db_path}")
+            sys.exit(1)
+    else:
+        optuna_db_path = Path(optuna_db_path)
+
+    if not optuna_db_path.exists():
+        print(f"Optuna study database not found: {optuna_db_path}")
+        sys.exit(1)
+
+    db_url = f"sqlite:///{optuna_db_path}"
+    od_cmd = [
+        "optuna-dashboard",
+        db_url,
+        "--port", str(args.port),
+    ]
+
+    if args.bind_all:
+        od_cmd.extend(["--host", "0.0.0.0"])
+
+    study_name = manifest.get('optuna_study_name', 'unknown')
+    print(f"Starting Optuna Dashboard for optimization experiment: {experiment.name}")
+    print(f"Study name: {study_name}")
+    print(f"Database: {optuna_db_path}")
+    print(f"Port: {args.port}")
+
+    if args.bind_all:
+        print(f"Binding: 0.0.0.0 (all network interfaces)")
+        print()
+        print(f"Open http://0.0.0.0:{args.port} or http://<your-ip>:{args.port} in your browser")
+    else:
+        print(f"Binding: localhost only")
+        print()
+        print(f"Open http://localhost:{args.port} in your browser")
+
+    print()
+
+    try:
+        subprocess.run(od_cmd)
+    except KeyboardInterrupt:
+        print("\nOptuna Dashboard stopped")
+    except FileNotFoundError:
+        print("\nError: optuna-dashboard command not found")
+        print("Please ensure optuna-dashboard is installed")
+        sys.exit(1)
+
+
 def handle_migrate_command(args):
     """Handle migration command."""
     path = Path(args.path)
@@ -551,6 +652,7 @@ def main():
     setup_experiment_commands(subparsers)
     setup_checkpoint_commands(subparsers)
     setup_tensorboard_command(subparsers)
+    setup_optuna_dashboard_command(subparsers)
     setup_migrate_commands(subparsers)
     setup_view_command(subparsers)
     
@@ -592,6 +694,8 @@ def main():
         handle_checkpoint_commands(args)
     elif args.command == "tensorboard":
         handle_tensorboard_command(args)
+    elif args.command == "optuna-dashboard":
+        handle_optuna_dashboard_command(args)
     elif args.command == "migrate":
         handle_migrate_command(args)
     elif args.command == "view":

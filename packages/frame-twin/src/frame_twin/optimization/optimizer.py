@@ -58,14 +58,48 @@ class OptunaOptimizer:
         # Create sampler
         sampler = self._create_sampler()
 
+        # Get objective names for metric_names parameter
+        objective_names = [obj.name for obj in self.config.objectives]
+
         self.study = optuna.create_study(
             study_name=self.config.optuna.study_name,
             storage=f"sqlite:///{storage_path}",
             sampler=sampler,
             pruner=pruner,
             directions=directions,
+            metric_names=objective_names,
             load_if_exists=resume
         )
+
+        # Store study metadata for dashboard and future reference
+        self.study.set_user_attr('objective_names', objective_names)
+        self.study.set_user_attr('objective_directions', directions)
+        self.study.set_user_attr('parent_experiment_uuid', self.parent_experiment.uuid)
+        self.study.set_user_attr('parent_experiment_path', str(self.parent_experiment.path))
+        self.study.set_user_attr('config_path', str(self.config_path) if self.config_path else '')
+        self.study.set_user_attr('library_uuid', self.config.data.library_uuid)
+
+        # Store search space configuration as JSON
+        search_space_dict = {}
+        for param_name in ['latent_channels', 'channel_schedule_type', 'base_channels',
+                            'kl_weight', 'free_bits', 'edge_weight', 'learning_rate',
+                            'kl_warmup_epochs', 'optimizer', 'batch_size']:
+            param_config = getattr(self.config.search_space, param_name, None)
+            if param_config is not None:
+                search_space_dict[param_name] = param_config.dict()
+        self.study.set_user_attr('search_space', json.dumps(search_space_dict))
+
+        # Store sampler configuration
+        self.study.set_user_attr('sampler_type', self.config.optuna.sampler)
+        self.study.set_user_attr('sampler_seed', self.config.metadata.random_seed)
+        self.study.set_user_attr('n_startup_trials', self.config.optuna.n_startup_trials)
+
+        # Store pruner configuration
+        if self.config.optuna.pruner and self.config.optuna.pruner != "none":
+            self.study.set_user_attr('pruner_type', self.config.optuna.pruner)
+            self.study.set_user_attr('n_warmup_steps', self.config.optuna.n_warmup_steps)
+        else:
+            self.study.set_user_attr('pruner_type', 'none')
 
         print(f"Starting optimization study: {self.config.optuna.study_name}")
         print(f"  Parent experiment: {self.parent_experiment.uuid}")
@@ -148,6 +182,18 @@ class OptunaOptimizer:
         # Create trials subdirectory for storing individual trial experiments
         trials_dir = experiment.path / "trials"
         trials_dir.mkdir(exist_ok=True)
+
+        # Store optuna database path in experiment manifest
+        storage_path = self._get_storage_path()
+        manifest_path = experiment.path / "manifest.json"
+        with open(manifest_path, 'r') as f:
+            manifest = json.load(f)
+
+        manifest['optuna_study_db'] = str(storage_path)
+        manifest['optuna_study_name'] = self.config.optuna.study_name
+
+        with open(manifest_path, 'w') as f:
+            json.dump(manifest, f, indent=2)
 
         return experiment
 
