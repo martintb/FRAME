@@ -145,134 +145,159 @@ class StructureGenerator:
 
     def generate_batch(self) -> None:
         """Generate batch of structures with validation and voxelization."""
-        # Set random seeds
-        np.random.seed(self.config.metadata.get("random_seed", 42))
-        torch.manual_seed(self.config.metadata.get("random_seed", 42))
+        try:
+            # Set random seeds
+            np.random.seed(self.config.metadata.get("random_seed", 42))
+            torch.manual_seed(self.config.metadata.get("random_seed", 42))
 
-        # Create library using LibraryManager
-        print(f"Creating library: {self.config.generation.library_name}")
-        self.library = self.lib_manager.create_library(
-            name=self.config.generation.library_name,
-            structure_type=self.config.structure_type,
-            n_structures=self.config.generation.num_samples,
-            tags=["generated", self.config.structure_type],
-            generation_config=None,  # Will save separately
-            structures_info={"format": "zarr"} if self.config.output.save_parametric else {},
-            voxels_info={"format": "zarr"} if self.config.output.save_voxelized else {},
-        )
-        self.library_path = self.library.path
-        print(f"Library UUID: {self.library.uuid}")
-        print(f"Library path: {self.library_path}")
-
-        # Initialize storage for this library
-        if self.config.output.save_parametric:
-            self.parametric_storage = ParametricStorage(str(self.library_path))
-
-        # Sample from priors
-        print(f"Sampling structures (target: {self.config.generation.num_samples})...")
-
-        # Generate samples with rejection sampling
-        oversample_factor = 3  # Generate extra to account for rejections
-        max_total_attempts = self.config.generation.num_samples * oversample_factor
-
-        # Check if LHS sampling is enabled
-        lhs_mode = self.config.generation.sample_uniform_lhs
-        if lhs_mode and lhs_mode != False:
-            # Use Latin Hypercube Sampling for uniform priors
-            print(f"Using Latin Hypercube Sampling (method: {lhs_mode})...")
-
-            # Determine LHS method
-            if lhs_mode == True:
-                method = "standard"
-            else:
-                method = lhs_mode  # "standard" or "maximin"
-
-            # Generate LHS samples
-            all_params = self.prior_builder.build_lhs_samples(
-                num_samples=max_total_attempts,
-                method=method,
-                random_seed=self.config.metadata.get("random_seed", 42)
+            # Create library using LibraryManager
+            print(f"Creating library: {self.config.generation.library_name}")
+            self.library = self.lib_manager.create_library(
+                name=self.config.generation.library_name,
+                structure_type=self.config.structure_type,
+                n_structures=self.config.generation.num_samples,
+                tags=["generated", self.config.structure_type],
+                generation_config=None,  # Will save separately
+                structures_info={"format": "zarr"} if self.config.output.save_parametric else {},
+                voxels_info={"format": "zarr"} if self.config.output.save_voxelized else {},
             )
-        else:
-            # Use standard PyMC random sampling
-            print("Building PyMC prior model...")
-            model = self.prior_builder.build_model()
+            self.library_path = self.library.path
+            print(f"Library UUID: {self.library.uuid}")
+            print(f"Library path: {self.library_path}")
 
-            with model:
-                # Sample from prior
-                trace = pm.sample_prior_predictive(
-                    samples=max_total_attempts,
-                    random_seed=self.config.metadata.get("random_seed", 42),
+            # Update status to generating
+            self.library.update_status("generating")
+
+            # Initialize storage for this library
+            if self.config.output.save_parametric:
+                self.parametric_storage = ParametricStorage(str(self.library_path))
+
+            # Sample from priors
+            print(f"Sampling structures (target: {self.config.generation.num_samples})...")
+
+            # Generate samples with rejection sampling
+            oversample_factor = 3  # Generate extra to account for rejections
+            max_total_attempts = self.config.generation.num_samples * oversample_factor
+
+            # Check if LHS sampling is enabled
+            lhs_mode = self.config.generation.sample_uniform_lhs
+            if lhs_mode and lhs_mode != False:
+                # Use Latin Hypercube Sampling for uniform priors
+                print(f"Using Latin Hypercube Sampling (method: {lhs_mode})...")
+
+                # Determine LHS method
+                if lhs_mode == True:
+                    method = "standard"
+                else:
+                    method = lhs_mode  # "standard" or "maximin"
+
+                # Generate LHS samples
+                all_params = self.prior_builder.build_lhs_samples(
+                    num_samples=max_total_attempts,
+                    method=method,
+                    random_seed=self.config.metadata.get("random_seed", 42)
+                )
+            else:
+                # Use standard PyMC random sampling
+                print("Building PyMC prior model...")
+                model = self.prior_builder.build_model()
+
+                with model:
+                    # Sample from prior
+                    trace = pm.sample_prior_predictive(
+                        samples=max_total_attempts,
+                        random_seed=self.config.metadata.get("random_seed", 42),
+                    )
+
+                # Extract parameter samples
+                param_samples = {}
+                for key in trace.prior.keys():
+                    values = trace.prior[key].values
+                    # Flatten to 1D
+                    param_samples[key] = values.flatten()
+
+                num_samples = len(next(iter(param_samples.values())))
+
+                # Convert to list of parameter dicts
+                all_params = []
+                for i in range(num_samples):
+                    params = {k: float(v[i]) for k, v in param_samples.items()}
+                    all_params.append(params)
+
+            # Determine number of workers
+            num_workers = self.config.generation.parallel_workers
+            if num_workers <= 0:
+                num_workers = max(1, cpu_count() - 1)  # Leave one CPU free
+
+            print(f"Using {num_workers} parallel workers...")
+
+            # Initialize storage writers
+            if self.config.output.save_parametric:
+                print("Initializing parametric storage...")
+                self.parametric_storage.create_empty(self.config.generation.num_samples)
+
+            if self.config.output.save_voxelized:
+                print("Initializing voxel storage...")
+                voxels_path = self.library_path / "voxels.zarr"
+
+                # Get grid shape and channel info
+                n_channels = len(self.config.voxelization.get("channels", {}))
+                voxel_shape = (self.config.grid.nz, self.config.grid.ny, self.config.grid.nx)
+                channel_map = self.config.voxelization.get("channels", {})
+
+                self.voxel_writer = VoxelLibraryWriter.create(
+                    path=voxels_path,
+                    n_structures=self.config.generation.num_samples,
+                    voxel_shape=voxel_shape,
+                    n_channels=n_channels,
+                    channel_names=channel_map,
+                    voxel_size_nm=self.config.grid.dx_nm,
+                    structure_type=self.config.structure_type
                 )
 
-            # Extract parameter samples
-            param_samples = {}
-            for key in trace.prior.keys():
-                values = trace.prior[key].values
-                # Flatten to 1D
-                param_samples[key] = values.flatten()
+            # Process structures
+            if num_workers == 1:
+                # Sequential processing
+                self._generate_sequential(all_params)
+            else:
+                # Parallel processing
+                self._generate_parallel(all_params, num_workers)
 
-            num_samples = len(next(iter(param_samples.values())))
+            # Finalize storage
+            print("\nFinalizing storage...")
+            if self.voxel_writer:
+                self.voxel_writer.finalize(compute_statistics=True)
 
-            # Convert to list of parameter dicts
-            all_params = []
-            for i in range(num_samples):
-                params = {k: float(v[i]) for k, v in param_samples.items()}
-                all_params.append(params)
+            # Save metadata
+            self._save_metadata()
 
-        # Determine number of workers
-        num_workers = self.config.generation.parallel_workers
-        if num_workers <= 0:
-            num_workers = max(1, cpu_count() - 1)  # Leave one CPU free
+            # Print summary
+            self._print_summary()
 
-        print(f"Using {num_workers} parallel workers...")
+            # Update status to completed
+            self.library.update_status("completed")
 
-        # Initialize storage writers
-        if self.config.output.save_parametric:
-            print("Initializing parametric storage...")
-            self.parametric_storage.create_empty(self.config.generation.num_samples)
-        
-        if self.config.output.save_voxelized:
-            print("Initializing voxel storage...")
-            voxels_path = self.library_path / "voxels.zarr"
+            print(f"\n✓ Library created successfully!")
+            print(f"  UUID: {self.library.uuid}")
+            print(f"  Path: {self.library_path}")
 
-            # Get grid shape and channel info
-            n_channels = len(self.config.voxelization.get("channels", {}))
-            voxel_shape = (self.config.grid.nz, self.config.grid.ny, self.config.grid.nx)
-            channel_map = self.config.voxelization.get("channels", {})
+        except KeyboardInterrupt:
+            # User interrupted generation (Ctrl+C)
+            if self.library:
+                try:
+                    self.library.update_status("stopped")
+                except Exception:
+                    pass  # Don't fail if we can't update status
+            raise
 
-            self.voxel_writer = VoxelLibraryWriter.create(
-                path=voxels_path,
-                n_structures=self.config.generation.num_samples,
-                voxel_shape=voxel_shape,
-                n_channels=n_channels,
-                channel_names=channel_map,
-                voxel_size_nm=self.config.grid.dx_nm,
-                structure_type=self.config.structure_type
-            )
-
-        # Process structures
-        if num_workers == 1:
-            # Sequential processing
-            self._generate_sequential(all_params)
-        else:
-            # Parallel processing
-            self._generate_parallel(all_params, num_workers)
-
-        # Finalize storage
-        print("\nFinalizing storage...")
-        if self.voxel_writer:
-            self.voxel_writer.finalize(compute_statistics=True)
-
-        # Save metadata
-        self._save_metadata()
-
-        # Print summary
-        self._print_summary()
-
-        print(f"\n✓ Library created successfully!")
-        print(f"  UUID: {self.library.uuid}")
-        print(f"  Path: {self.library_path}")
+        except Exception as e:
+            # Generation failed
+            if self.library:
+                try:
+                    self.library.update_status("failed")
+                except Exception:
+                    pass  # Don't fail if we can't update status
+            raise e
     
     def _generate_sequential(self, all_params):
         """Sequential generation with streaming writes."""

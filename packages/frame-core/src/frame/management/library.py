@@ -13,7 +13,7 @@ from .utils import generate_uuid, timestamp_iso, write_protect, write_protect_tr
 @dataclass
 class Library:
     """Represents a data library with metadata."""
-    
+
     uuid: str
     name: str
     tags: list[str]
@@ -25,6 +25,7 @@ class Library:
     generation_config: Optional[str]
     structures: dict[str, Any]
     voxels: dict[str, Any]
+    status: str
     path: Path
     
     @classmethod
@@ -52,6 +53,7 @@ class Library:
             generation_config=data.get("generation_config"),
             structures=data.get("structures", {}),
             voxels=data.get("voxels", {}),
+            status=data.get("status", "created"),
             path=manifest_path.parent
         )
     
@@ -69,7 +71,32 @@ class Library:
             "generation_config": self.generation_config,
             "structures": self.structures,
             "voxels": self.voxels,
+            "status": self.status,
         }
+
+    def update_status(self, status: str):
+        """Update library status.
+
+        Args:
+            status: New status (e.g., 'generating', 'completed', 'failed', 'stopped')
+        """
+        self.status = status
+        self._update_manifest()
+
+    def _update_manifest(self):
+        """Update manifest file for this library."""
+        import stat
+        manifest_path = self.path / "manifest.json"
+
+        # Temporarily make writable
+        manifest_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+
+        # Update manifest
+        with open(manifest_path, "w") as f:
+            json.dump(self.to_dict(), f, indent=2)
+
+        # Re-protect
+        write_protect(manifest_path)
 
 
 class LibraryManager:
@@ -189,6 +216,7 @@ class LibraryManager:
             "generation_config": generation_config,
             "structures": structures_info or {},
             "voxels": voxels_info or {},
+            "status": "created",
         }
         
         # Write manifest

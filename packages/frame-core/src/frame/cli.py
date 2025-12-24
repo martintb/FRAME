@@ -149,6 +149,7 @@ def handle_library_commands(args):
             print(f"    Name: {lib.name}")
             print(f"    Type: {lib.structure_type}")
             print(f"    Structures: {lib.n_structures}")
+            print(f"    Status: {lib.status}")
             print(f"    Created: {lib.created}")
             print()
     
@@ -163,6 +164,7 @@ def handle_library_commands(args):
         print(f"  Tags: {', '.join(library.tags)}")
         print(f"  Type: {library.structure_type}")
         print(f"  Structures: {library.n_structures}")
+        print(f"  Status: {library.status}")
         print(f"  Created: {library.created}")
         print(f"  Path: {library.path}")
         
@@ -204,6 +206,63 @@ def handle_library_commands(args):
         print(f"Removed tag '{args.tag}' from library {args.uuid}")
 
 
+def _get_optuna_trial_progress(experiment) -> Optional[str]:
+    """Get trial progress string for optimization experiments.
+
+    Args:
+        experiment: Experiment object
+
+    Returns:
+        String like "5/100" or None if not optimization/unavailable
+    """
+    # Check if optimization experiment
+    if "optimization" not in experiment.tags and "optuna" not in experiment.tags:
+        return None
+
+    try:
+        import json
+        from pathlib import Path
+
+        # Read manifest
+        manifest_path = experiment.path / "manifest.json"
+        if not manifest_path.exists():
+            return None
+
+        with open(manifest_path, 'r') as f:
+            manifest = json.load(f)
+
+        # Get database and target
+        study_db = manifest.get('optuna_study_db')
+        study_name = manifest.get('optuna_study_name')
+        n_trials = manifest.get('optuna_n_trials')
+
+        if not study_db or not study_name:
+            return None
+
+        study_db_path = Path(study_db)
+        if not study_db_path.exists():
+            return None
+
+        # Load study and count completed
+        import optuna
+        storage = f"sqlite:///{study_db_path}"
+        study = optuna.load_study(study_name=study_name, storage=storage)
+
+        completed = len([
+            t for t in study.trials
+            if t.state == optuna.trial.TrialState.COMPLETE
+        ])
+
+        if n_trials:
+            return f"{completed}/{n_trials}"
+        else:
+            return f"{completed}"
+
+    except Exception:
+        # Graceful degradation - just don't show trial progress
+        return None
+
+
 def handle_experiment_commands(args):
     """Handle experiment management commands."""
     exp_mgr = ExperimentManager()
@@ -228,7 +287,14 @@ def handle_experiment_commands(args):
             print(f"    Type: {exp.model_type}")
             print(f"    Status: {exp.status}")
             print(f"    Library: {exp.library_uuid}")
-            print(f"    Checkpoints: {len(exp.checkpoints)}")
+
+            # Show trial progress for optimization, otherwise checkpoints
+            trial_progress = _get_optuna_trial_progress(exp)
+            if trial_progress:
+                print(f"    Trials: {trial_progress}")
+            else:
+                print(f"    Checkpoints: {len(exp.checkpoints)}")
+
             print(f"    Created: {exp.created}")
             print()
     

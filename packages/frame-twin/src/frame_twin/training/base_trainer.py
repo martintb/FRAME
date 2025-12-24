@@ -119,8 +119,8 @@ class BaseTrainer:
 
         # Update experiment status first
         if self.experiment:
-            self.experiment.update_status("interrupted")
-            print(f"Updated experiment {self.experiment.uuid} status to 'interrupted'")
+            self.experiment.update_status("stopped")
+            print(f"Updated experiment {self.experiment.uuid} status to 'stopped'")
 
         # Save final checkpoint with current state
         is_best = val_metrics.get('val_loss', float('inf')) < self.best_val_loss if val_metrics else False

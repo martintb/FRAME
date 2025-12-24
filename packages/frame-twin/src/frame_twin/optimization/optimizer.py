@@ -193,6 +193,7 @@ class OptunaOptimizer:
 
         manifest['optuna_study_db'] = str(storage_path)
         manifest['optuna_study_name'] = self.config.optuna.study_name
+        manifest['optuna_n_trials'] = self.config.optuna.n_trials
 
         with open(manifest_path, 'w') as f:
             json.dump(manifest, f, indent=2)
