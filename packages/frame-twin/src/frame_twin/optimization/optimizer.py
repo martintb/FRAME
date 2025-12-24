@@ -252,12 +252,18 @@ class OptunaOptimizer:
             # 2. Create trial config
             trial_config = self._create_trial_config(trial, params)
 
-            # 3. Create pruning callback if pruner is enabled
+            # 3. Create pruning callback if pruner is enabled AND single-objective
             pruning_callback = None
             if self.config.optuna.pruner and self.config.optuna.pruner != "none":
-                # Monitor the first objective metric for pruning
-                monitor_metric = self.config.objectives[0].name
-                pruning_callback = OptunaPruningCallback(trial, monitor_metric=monitor_metric)
+                if len(self.config.objectives) > 1:
+                    # Only warn once per study (first trial)
+                    if trial.number == 0:
+                        print("Warning: Pruning is not supported for multi-objective optimization. "
+                              "Pruner will be disabled for this study.")
+                else:
+                    # Single objective - pruning is supported
+                    monitor_metric = self.config.objectives[0].name
+                    pruning_callback = OptunaPruningCallback(trial, monitor_metric=monitor_metric)
 
             # 4. Run training
             trial_experiment = self._run_trial_training(trial, trial_config, pruning_callback)
