@@ -321,6 +321,7 @@ class LoggingConfig(BaseModel):
     log_latent_histograms: bool = Field(True, description="Enable/disable histogram logging for latent space")
     compute_active_units: bool = Field(True, description="Enable/disable active units metric computation")
     compute_prior_sample_quality: bool = Field(True, description="Enable/disable prior sampling quality metric")
+    compute_gen_consistency: bool = Field(False, description="Compute generation consistency error for Optuna optimization")
     compute_interpolation_smoothness: bool = Field(True, description="Enable/disable interpolation smoothness metric")
     interpolation_num_pairs: int = Field(20, gt=0, description="Number of structure pairs for interpolation")
     interpolation_num_steps: int = Field(10, gt=0, description="Number of steps per interpolation")

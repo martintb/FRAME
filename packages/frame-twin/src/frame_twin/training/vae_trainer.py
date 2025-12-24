@@ -868,6 +868,176 @@ class VAETrainer(BaseTrainer):
             self.writer.add_scalar(f"{prefix}/prior_sample_std_error", abs(gen_std - real_std), step)
             self.writer.add_scalar(f"{prefix}/prior_sample_channel_divergence", channel_divergence, step)
 
+    def _compute_prior_sample_quality_for_metrics(self) -> Dict[str, float]:
+        """Compute prior sample quality metrics for Optuna optimization.
+        
+        Returns:
+            Dict with keys: prior_sample_mean_error, prior_sample_std_error, 
+                            prior_sample_channel_divergence
+        """
+        if self.val_loader is None:
+            return {}
+        
+        n_samples = self.config.logging.prior_sample_num_samples
+        
+        self.model.eval()
+        with torch.no_grad():
+            # Sample from prior N(0,1)
+            if self.is_hvae:
+                # HVAE: sample from top latent only for comparison
+                if hasattr(self.model, 'latent_spatial_size_top') and self.model.latent_spatial_size_top is not None:
+                    latent_size = self.model.latent_spatial_size_top
+                else:
+                    # Fallback: infer from first validation batch
+                    sample_batch = next(iter(self.val_loader))
+                    if isinstance(sample_batch, dict):
+                        sample_voxels = sample_batch['voxels'].to(self.device)
+                    else:
+                        sample_voxels = sample_batch.to(self.device)
+                    z_top, _ = self.model.encode(sample_voxels[:1])
+                    if isinstance(z_top, tuple):
+                        z_top = z_top[0]
+                    latent_size = z_top.shape[2] if z_top.ndim == 5 else None
+                
+                if latent_size is not None:
+                    z_samples = torch.randn(n_samples, self.model.latent_channels_top, latent_size, latent_size, latent_size, device=self.device)
+                    generated = self.model.decode(z_samples)
+                else:
+                    # Non-spatial: use latent_channels_top as dimension
+                    z_samples = torch.randn(n_samples, self.model.latent_channels_top, device=self.device)
+                    generated = self.model.decode(z_samples)
+            elif getattr(self, 'is_vp_hvae', False):
+                # VP-HVAE: sample z2 from VampPrior or standard prior, then sample z1
+                z2_samples = torch.randn(n_samples, self.model.z2_size, device=self.device)
+                # Sample z1 from conditional prior p(z1|z2)
+                z1_p_mean, z1_p_logvar = self.model.p_z1(z2_samples)
+                z1_samples = self.model.reparameterize(z1_p_mean, z1_p_logvar)
+                # Decode
+                generated, _ = self.model.decode(z1_samples, z2_samples, target_resolution=64)  # Default resolution
+            else:
+                # Standard VAE: sample from N(0,1)
+                if self.model.spatial_latent:
+                    # Spatial latents: need to infer spatial size
+                    if hasattr(self.model, 'latent_spatial_size') and self.model.latent_spatial_size is not None:
+                        latent_size = self.model.latent_spatial_size
+                    else:
+                        # Infer from first validation batch
+                        sample_batch = next(iter(self.val_loader))
+                        if isinstance(sample_batch, dict):
+                            sample_voxels = sample_batch['voxels'].to(self.device)
+                        else:
+                            sample_voxels = sample_batch.to(self.device)
+                        z_sample = self.model.encode(sample_voxels[:1])
+                        latent_size = z_sample.shape[2] if z_sample.ndim == 5 else 16  # Fallback
+                    z_samples = torch.randn(n_samples, self.model.latent_channels, latent_size, latent_size, latent_size, device=self.device)
+                else:
+                    # Non-spatial latents
+                    z_samples = torch.randn(n_samples, self.model.latent_channels, device=self.device)
+                generated = self.model.decode(z_samples)
+            
+            # Apply activation if needed (for models that output logits)
+            if hasattr(self.loss_fn, 'reconstruction_type'):
+                rtype = getattr(self.loss_fn, 'reconstruction_type', 'mse')
+                if rtype == 'bce_logits':
+                    generated = torch.sigmoid(generated)
+                elif rtype == 'fractional_ce':
+                    generated = torch.nn.functional.softmax(generated, dim=1)
+            
+            # Collect validation samples for comparison
+            val_samples = []
+            val_count = 0
+            for batch in self.val_loader:
+                if isinstance(batch, dict):
+                    voxels = batch['voxels'].to(self.device)
+                else:
+                    voxels = batch.to(self.device)
+                val_samples.append(voxels)
+                val_count += voxels.shape[0]
+                if val_count >= n_samples:
+                    break
+            
+            if len(val_samples) == 0:
+                return {}
+            
+            val_samples = torch.cat(val_samples, dim=0)[:n_samples]
+            
+            # Compare statistics
+            gen_mean = generated.mean().item()
+            real_mean = val_samples.mean().item()
+            
+            gen_std = generated.std().item()
+            real_std = val_samples.std().item()
+            
+            # Channel-wise comparison
+            gen_channel_means = generated.mean(dim=[0, 2, 3, 4])  # (C,)
+            real_channel_means = val_samples.mean(dim=[0, 2, 3, 4])  # (C,)
+            channel_divergence = (gen_channel_means - real_channel_means).abs().mean().item()
+            
+            # Return metrics dict
+            return {
+                'prior_sample_mean_error': abs(gen_mean - real_mean),
+                'prior_sample_std_error': abs(gen_std - real_std),
+                'prior_sample_channel_divergence': channel_divergence,
+            }
+
+    def _compute_generation_consistency(self) -> Optional[float]:
+        """Compute generation consistency error: z -> decode -> encode -> z'.
+        
+        Measures how well the VAE can reconstruct latent codes from its own generations.
+        Lower values indicate better cycle consistency.
+        
+        Returns:
+            Consistency error (MSE between z and z'), or None if computation fails
+        """
+        if self.val_loader is None:
+            return None
+        
+        # Skip for HVAE and VP-HVAE (only support standard VAE/UNetVAE)
+        if self.is_hvae or getattr(self, 'is_vp_hvae', False):
+            return None
+        
+        n_samples = 16  # Fixed batch size for this metric
+        
+        self.model.eval()
+        with torch.no_grad():
+            # 1. Sample z from prior N(0,1)
+            if self.model.spatial_latent:
+                # Spatial latents: need to infer spatial size
+                if hasattr(self.model, 'latent_spatial_size') and self.model.latent_spatial_size is not None:
+                    s_size = self.model.latent_spatial_size
+                else:
+                    # Infer from first validation batch
+                    sample_batch = next(iter(self.val_loader))
+                    if isinstance(sample_batch, dict):
+                        sample_voxels = sample_batch['voxels'].to(self.device)
+                    else:
+                        sample_voxels = sample_batch.to(self.device)
+                    z_sample_check = self.model.encode(sample_voxels[:1])
+                    s_size = z_sample_check.shape[2] if z_sample_check.ndim == 5 else 16
+                
+                z_sample = torch.randn(n_samples, self.model.latent_channels, 
+                                       s_size, s_size, s_size, device=self.device)
+            else:
+                # Non-spatial latents: (B, latent_dim)
+                z_sample = torch.randn(n_samples, self.model.latent_channels, device=self.device)
+            
+            # 2. Generate image from z
+            x_gen = self.model.decode(z_sample)
+            
+            # 3. Re-encode the generated image
+            encoder_out = self.model.encoder(x_gen)
+            if len(encoder_out) == 4:
+                # UNetVAE: (z, mu, logvar, skips)
+                _, mu_re, _, _ = encoder_out
+            else:
+                # Standard VAE: (z, mu, logvar)
+                _, mu_re, _ = encoder_out
+            
+            # 4. Compute MSE between original z and re-encoded mean
+            consistency_error = torch.nn.functional.mse_loss(z_sample, mu_re)
+            
+            return consistency_error.item()
+
     def _compute_interpolation_smoothness(self, prefix: str, step: int):
         """Compute smoothness of interpolations in latent space.
         
@@ -976,6 +1146,23 @@ class VAETrainer(BaseTrainer):
                 val_metrics.update(latent_stats)
             except Exception as e:
                 print(f"Warning: Failed to compute latent statistics: {e}")
+
+        # NEW: Prior sample quality metrics (for Optuna)
+        if self.config.logging.compute_prior_sample_quality:
+            try:
+                prior_metrics = self._compute_prior_sample_quality_for_metrics()
+                val_metrics.update(prior_metrics)
+            except Exception as e:
+                print(f"Warning: Failed to compute prior sample quality: {e}")
+
+        # NEW: Generation consistency (for Optuna)
+        if getattr(self.config.logging, 'compute_gen_consistency', False):
+            try:
+                consistency_error = self._compute_generation_consistency()
+                if consistency_error is not None:
+                    val_metrics['gen_consistency_error'] = consistency_error
+            except Exception as e:
+                print(f"Warning: Failed to compute generation consistency: {e}")
 
         return val_metrics
 

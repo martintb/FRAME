@@ -73,7 +73,8 @@ max_latent_analysis_samples = 32
 # Enable metrics needed for objectives
 log_latent_histograms = true
 compute_active_units = true
-compute_prior_sample_quality = false  # Disable to save time
+compute_prior_sample_quality = true  # Enable for prior_sample_channel_divergence objective
+compute_gen_consistency = true  # Enable for gen_consistency_error objective
 compute_interpolation_smoothness = false  # Disable to save time
 active_units_threshold = 0.01
 
@@ -171,3 +172,13 @@ name = "std_mean"
 direction = "target"
 target = 1.0
 tolerance = 0.2
+
+[[objectives]]
+name = "prior_sample_channel_divergence"
+direction = "minimize"
+weight = 1.0
+
+[[objectives]]
+name = "gen_consistency_error"
+direction = "minimize"
+weight = 1.0
