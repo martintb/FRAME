@@ -20,6 +20,21 @@ def extract_objective_value(
     metric_value = metrics.get(objective.name)
 
     if metric_value is None:
+        # Warn about missing metric with helpful context
+        import warnings
+        available = ", ".join(sorted(metrics.keys())[:10])
+        if len(metrics) > 10:
+            available += f", ... ({len(metrics) - 10} more)"
+
+        warnings.warn(
+            f"Objective metric '{objective.name}' not found in checkpoint. "
+            f"Returning worst value ({'inf' if objective.direction == 'minimize' else '-inf'}). "
+            f"Available metrics: {available}. "
+            f"This should have been caught by first-trial validation!",
+            category=UserWarning,
+            stacklevel=2
+        )
+
         # Return worst possible value if metric is missing
         if objective.direction == "minimize":
             return float('inf')

@@ -271,6 +271,10 @@ class OptunaOptimizer:
             # 5. Extract metrics
             metrics = self._extract_metrics(trial_experiment)
 
+            # 5.5. Validate objectives after first trial to fail fast
+            if trial.number == 0:
+                self._validate_objectives_after_first_trial(metrics, trial)
+
             # 6. Log trial info
             trial.set_user_attr('trial_uuid', trial_experiment.uuid)  # Store trial UUID for symlinking
             trial.set_user_attr('experiment_uuid', trial_experiment.uuid)  # Legacy compatibility
@@ -448,6 +452,93 @@ class OptunaOptimizer:
             ckpt = checkpoints[-1]
 
         return ckpt.metrics
+
+    def _validate_objectives_after_first_trial(self, metrics: Dict[str, float], trial: optuna.Trial):
+        """Validate that all objective metrics are present after first trial.
+
+        This provides early feedback if optimization config references metrics
+        that don't exist in checkpoints.
+
+        Args:
+            metrics: Metrics from first trial checkpoint
+            trial: Optuna trial object
+
+        Raises:
+            ValueError: If any objective metric is missing from checkpoint
+        """
+        missing_objectives = []
+        available_metrics = sorted(metrics.keys())
+
+        for objective in self.config.objectives:
+            if objective.name not in metrics:
+                missing_objectives.append(objective)
+
+        if missing_objectives:
+            # Build comprehensive error message
+            error_lines = [
+                f"\n{'='*80}",
+                "ERROR: Missing Objective Metrics After First Trial",
+                f"{'='*80}",
+                "",
+                "The following objectives are not available in checkpoint metrics:",
+                ""
+            ]
+
+            for obj in missing_objectives:
+                error_lines.append(f"  - '{obj.name}' (direction: {obj.direction})")
+
+            error_lines.extend([
+                "",
+                f"Available metrics in checkpoint ({len(available_metrics)} total):",
+                ""
+            ])
+
+            # Group metrics by prefix for readability
+            train_metrics = [m for m in available_metrics if m.startswith('train_')]
+            val_metrics = [m for m in available_metrics if m.startswith('val_')]
+            other_metrics = [m for m in available_metrics
+                            if not (m.startswith('train_') or m.startswith('val_'))]
+
+            if train_metrics:
+                error_lines.append("  Training metrics:")
+                for m in sorted(train_metrics):
+                    error_lines.append(f"    - {m}")
+                error_lines.append("")
+
+            if val_metrics:
+                error_lines.append("  Validation metrics:")
+                for m in sorted(val_metrics):
+                    error_lines.append(f"    - {m}")
+                error_lines.append("")
+
+            if other_metrics:
+                error_lines.append("  Other metrics:")
+                for m in sorted(other_metrics):
+                    error_lines.append(f"    - {m}")
+                error_lines.append("")
+
+            error_lines.extend([
+                "Suggestions:",
+                "  1. Check metric names in your optimization config objectives section",
+                "  2. For training metrics, use 'train_' prefix (e.g., 'train_kl_loss')",
+                "  3. For validation metrics, use 'val_' prefix (e.g., 'val_kl_loss')",
+                "  4. For latent statistics, use names like 'mu_mean', 'kl_total', etc.",
+                "  5. Use `frame checkpoint inspect <uuid>` to see all available metrics",
+                "",
+                f"{'='*80}",
+                ""
+            ])
+
+            error_msg = "\n".join(error_lines)
+
+            # Print and raise
+            print(error_msg)
+
+            # Mark trial as failed
+            trial.set_user_attr('validation_failed', True)
+            trial.set_user_attr('validation_error', "Missing objective metrics")
+
+            raise ValueError(error_msg)
 
     def analyze_results(self, study: optuna.Study) -> None:
         """Analyze and save optimization results.

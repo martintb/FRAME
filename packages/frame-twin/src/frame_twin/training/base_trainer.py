@@ -156,6 +156,9 @@ class BaseTrainer:
             'num_batches': 0
         }
 
+        # Accumulate detailed metrics from _compute_loss
+        detailed_metrics_accumulator = {}
+
         progress_bar = tqdm(
             self.train_loader,
             desc=f"Epoch {self.current_epoch}",
@@ -168,6 +171,10 @@ class BaseTrainer:
                 # Average metrics computed so far
                 if epoch_metrics['num_batches'] > 0:
                     epoch_metrics['train_loss'] /= epoch_metrics['num_batches']
+                    # Average detailed metrics
+                    for metric_name, metric_sum in detailed_metrics_accumulator.items():
+                        avg_value = metric_sum / epoch_metrics['num_batches']
+                        epoch_metrics[f'train_{metric_name}'] = avg_value
                 return epoch_metrics
 
             # Move batch to device
@@ -197,6 +204,12 @@ class BaseTrainer:
             epoch_metrics['train_loss'] += loss.item()
             epoch_metrics['num_batches'] += 1
 
+            # Accumulate detailed metrics
+            for metric_name, metric_value in metrics.items():
+                if metric_name not in detailed_metrics_accumulator:
+                    detailed_metrics_accumulator[metric_name] = 0.0
+                detailed_metrics_accumulator[metric_name] += metric_value
+
             # Update global step
             self.global_step += 1
 
@@ -220,6 +233,11 @@ class BaseTrainer:
         # Average metrics
         epoch_metrics['train_loss'] /= epoch_metrics['num_batches']
 
+        # Average detailed metrics and add with 'train_' prefix
+        for metric_name, metric_sum in detailed_metrics_accumulator.items():
+            avg_value = metric_sum / epoch_metrics['num_batches']
+            epoch_metrics[f'train_{metric_name}'] = avg_value
+
         return epoch_metrics
     
     def validate_epoch(self) -> Dict[str, float]:
@@ -230,7 +248,10 @@ class BaseTrainer:
             'val_loss': 0.0,
             'num_batches': 0
         }
-        
+
+        # Accumulate detailed metrics from _compute_loss
+        detailed_metrics_accumulator = {}
+
         # Store first batch for reconstruction logging
         sample_batch_for_logging = None
         sample_latent_tuple = None
@@ -242,6 +263,10 @@ class BaseTrainer:
                     # Average metrics computed so far
                     if epoch_metrics['num_batches'] > 0:
                         epoch_metrics['val_loss'] /= epoch_metrics['num_batches']
+                        # Average detailed metrics
+                        for metric_name, metric_sum in detailed_metrics_accumulator.items():
+                            avg_value = metric_sum / epoch_metrics['num_batches']
+                            epoch_metrics[f'val_{metric_name}'] = avg_value
                     return epoch_metrics
 
                 # Move batch to device
@@ -268,6 +293,12 @@ class BaseTrainer:
                 epoch_metrics['val_loss'] += loss.item()
                 epoch_metrics['num_batches'] += 1
 
+                # Accumulate detailed metrics
+                for metric_name, metric_value in metrics.items():
+                    if metric_name not in detailed_metrics_accumulator:
+                        detailed_metrics_accumulator[metric_name] = 0.0
+                    detailed_metrics_accumulator[metric_name] += metric_value
+
                 # Explicitly free memory
                 del loss, batch
                 if self.device.type == 'mps':
@@ -277,7 +308,12 @@ class BaseTrainer:
 
         # Average metrics
         epoch_metrics['val_loss'] /= epoch_metrics['num_batches']
-        
+
+        # Average detailed metrics and add with 'val_' prefix
+        for metric_name, metric_sum in detailed_metrics_accumulator.items():
+            avg_value = metric_sum / epoch_metrics['num_batches']
+            epoch_metrics[f'val_{metric_name}'] = avg_value
+
         # Store sample batch for epoch-based reconstruction logging
         self._last_val_batch = sample_batch_for_logging
         # Store latent tuple for epoch-based latent analysis
