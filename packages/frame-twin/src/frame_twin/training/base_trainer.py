@@ -115,36 +115,31 @@ class BaseTrainer:
     
     def _handle_interruption(self, train_metrics: Dict[str, float], val_metrics: Dict[str, float]):
         """Handle training interruption gracefully."""
-        print("\nTraining interrupted. Immediately stopping, updating metadata, and saving checkpoint...")
+        print("\n" + "="*80)
+        print("Training Interrupted")
+        print("="*80)
 
-        # Update experiment status first
+        # Update experiment status
         if self.experiment:
             self.experiment.update_status("stopped")
-            print(f"Updated experiment {self.experiment.uuid} status to 'stopped'")
 
-        # Save final checkpoint with current state
+        # Save checkpoint
         is_best = val_metrics.get('val_loss', float('inf')) < self.best_val_loss if val_metrics else False
         self._save_checkpoint(train_metrics, val_metrics, is_best)
-        print(f"Saved checkpoint at epoch {self.current_epoch}, step {self.global_step}")
 
-        # Log hyperparameters to TensorBoard (even for interrupted runs)
+        # Log hyperparameters
         self._log_hparams_to_tensorboard(train_metrics, val_metrics)
-        print("Logged hyperparameters to TensorBoard")
 
-        # Close TensorBoard writer
+        # Close writer
         if self.writer is not None:
             self.writer.close()
-            print("Closed TensorBoard writer")
 
         # Restore signal handlers
         self._restore_signal_handlers()
 
-        print("\nTraining stopped gracefully.")
-        print(f"  - Final epoch: {self.current_epoch}")
-        print(f"  - Final step: {self.global_step}")
-        print(f"  - Checkpoint saved")
-        print(f"  - Hyperparameters logged")
-        print(f"  - Experiment metadata updated")
+        print(f"Final state: epoch {self.current_epoch}, step {self.global_step}")
+        print("Checkpoint saved and experiment metadata updated")
+        print("="*80)
         sys.exit(0)
     
     def train_epoch(self) -> Dict[str, float]:
@@ -335,7 +330,15 @@ class BaseTrainer:
 
         # Log initial hyperparameters at the start of training
         self._log_initial_hparams()
-        
+
+        # Print training start with experiment info
+        print("\n" + "="*80)
+        print("Starting Training")
+        if self.experiment:
+            print(f"Experiment: {self.experiment.uuid}")
+            print(f"Path: {self.experiment.path}")
+        print("="*80 + "\n")
+
         try:
             for epoch in range(start_epoch, self.training_config.num_epochs):
                 # Check for interruption at the start of each epoch
@@ -418,7 +421,12 @@ class BaseTrainer:
                     self._save_checkpoint(train_metrics, val_metrics, is_best)
             
             # Training completed normally
-            print("Training completed successfully!")
+            print("\n" + "="*80)
+            print("Training Complete")
+            print(f"Best validation loss: {self.best_val_loss:.4f}")
+            if self.experiment:
+                print(f"Experiment: {self.experiment.uuid}")
+            print("="*80 + "\n")
 
             # Save final checkpoint
             self._save_checkpoint(train_metrics, val_metrics, is_best)
@@ -740,35 +748,22 @@ class BaseTrainer:
     def _log_initial_hparams(self):
         """Log hyperparameters at the start of training with placeholder metrics."""
         if self.writer is None:
-            print("Warning: TensorBoard writer is None, skipping initial hparams logging")
             return
-        
+
         if self.initial_hparams_logged:
-            print("Initial hparams already logged, skipping")
             return
-        
+
         # For continued runs, check if hparams already exist in the log directory
         if self.current_epoch > 0:
-            print(f"Continued run detected (starting from epoch {self.current_epoch})")
-            print("Skipping initial hparams logging to avoid duplicates")
             self.initial_hparams_logged = True
             return
-        
+
         # Extract hyperparameters
         hparams = self._log_hyperparameters()
-        print(f"\n{'='*80}")
-        print(f"INITIAL HPARAMS LOGGING - Logging {len(hparams)} hyperparameters at start")
-        print(f"{'='*80}")
-        
-        # Debug: print first few hparams
-        print("Sample hyperparameters (first 10):")
-        for i, (k, v) in enumerate(list(hparams.items())[:10]):
-            print(f"  {k}: {v} (type: {type(v).__name__})")
-        
+
         # Sanitize hparams to ensure all values are TensorBoard-compatible
         sanitized_hparams = {}
-        skipped = []
-        
+
         for key, value in hparams.items():
             try:
                 if isinstance(value, bool):
@@ -786,16 +781,9 @@ class BaseTrainer:
                     if len(str_val) > 500:
                         str_val = str_val[:497] + "..."
                     sanitized_hparams[key] = str_val
-            except Exception as e:
-                print(f"  Warning: Skipping hparam '{key}' due to error: {e}")
-                skipped.append((key, type(value).__name__))
-        
-        print(f"\nSanitized to {len(sanitized_hparams)} valid hparams")
-        if skipped:
-            print(f"Skipped {len(skipped)} problematic hparams:")
-            for key, type_name in skipped[:5]:
-                print(f"  - {key} (type: {type_name})")
-        
+            except Exception:
+                pass  # Skip problematic hparams silently
+
         # Use placeholder metrics for initial logging
         initial_metrics = {
             'hparam/best_val_loss': 999999.0,
@@ -804,31 +792,14 @@ class BaseTrainer:
             'hparam/final_epoch': 0,
             'hparam/total_steps': 0,
         }
-        
-        print(f"\nInitial metrics (placeholders):")
-        for k, v in initial_metrics.items():
-            print(f"  {k}: {v} (type: {type(v).__name__})")
-        
+
         # Log to TensorBoard hparams
         try:
-            print(f"\nCalling writer.add_hparams() for initial logging...")
             self.writer.add_hparams(sanitized_hparams, initial_metrics)
             self.writer.flush()
             self.initial_hparams_logged = True
-            
-            print(f"\n{'='*80}")
-            print(f"✓ Successfully logged initial hparams to TensorBoard")
-            print(f"  Log directory: {self.writer.log_dir}")
-            print(f"  Will be updated with final metrics at end of training")
-            print(f"{'='*80}\n")
         except Exception as e:
-            print(f"\n{'='*80}")
-            print(f"✗ FAILED to log initial hyperparameters to TensorBoard")
-            print(f"  Error: {e}")
-            print(f"{'='*80}")
-            import traceback
-            traceback.print_exc()
-            print()
+            print(f"Warning: Failed to log hyperparameters to TensorBoard: {e}")
 
     def _log_hparams_to_tensorboard(self, final_train_metrics: Dict[str, float], final_val_metrics: Dict[str, float]):
         """Update hyperparameters with final metrics to TensorBoard.
@@ -838,12 +809,10 @@ class BaseTrainer:
             final_val_metrics: Final validation metrics
         """
         if self.writer is None:
-            print("Warning: TensorBoard writer is None, skipping hparams update")
             return
 
         # If initial hparams weren't logged, log them now with final metrics
         if not self.initial_hparams_logged:
-            print("Initial hparams not logged, logging now with final metrics...")
             self._log_initial_hparams()
             # Update the metrics after initial logging
             self._update_hparams_metrics(final_train_metrics, final_val_metrics)
@@ -854,10 +823,6 @@ class BaseTrainer:
 
     def _update_hparams_metrics(self, final_train_metrics: Dict[str, float], final_val_metrics: Dict[str, float]):
         """Update hparams metrics without creating new hparams entry."""
-        print(f"\n{'='*80}")
-        print(f"UPDATING HPARAMS METRICS - Updating with final values")
-        print(f"{'='*80}")
-        
         # Prepare final metrics for hparams logging
         metrics = {
             'hparam/best_val_loss': float(self.best_val_loss) if self.best_val_loss != float('inf') else 999999.0,
@@ -866,32 +831,15 @@ class BaseTrainer:
             'hparam/final_epoch': int(self.current_epoch),
             'hparam/total_steps': int(self.global_step),
         }
-        
-        print(f"\nFinal metrics to update:")
-        for k, v in metrics.items():
-            print(f"  {k}: {v} (type: {type(v).__name__})")
 
         # Log metrics as scalars to update the existing hparams run
         try:
-            print(f"\nUpdating hparams metrics as scalars...")
             for metric_name, metric_value in metrics.items():
                 self.writer.add_scalar(metric_name, metric_value, global_step=0)
-            
+
             self.writer.flush()
-            
-            print(f"\n{'='*80}")
-            print(f"✓ Successfully updated hparams metrics in TensorBoard")
-            print(f"  Log directory: {self.writer.log_dir}")
-            print(f"  Updated {len(metrics)} metrics")
-            print(f"{'='*80}\n")
         except Exception as e:
-            print(f"\n{'='*80}")
-            print(f"✗ FAILED to update hparams metrics in TensorBoard")
-            print(f"  Error: {e}")
-            print(f"{'='*80}")
-            import traceback
-            traceback.print_exc()
-            print()
+            print(f"Warning: Failed to update hyperparameters in TensorBoard: {e}")
     
     def _save_checkpoint(self, train_metrics: Dict[str, float], val_metrics: Dict[str, float], is_best: bool):
         """Save training checkpoint."""

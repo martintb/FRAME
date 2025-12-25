@@ -356,7 +356,9 @@ def train_vae(config_path: str, epoch_callback=None):
     voxel_library = VoxelLibrary(library_path)
     
     # Create experiment using ExperimentManager
-    print("Creating experiment...")
+    print("\n" + "="*80)
+    print("Creating Experiment")
+    print("="*80)
     exp_mgr = ExperimentManager()
 
     # Build tags based on model type
@@ -386,8 +388,11 @@ def train_vae(config_path: str, epoch_callback=None):
         tags=tags,
         dependencies={}
     )
-    print(f"Created experiment: {experiment.uuid}")
-    print(f"Experiment path: {experiment.path}")
+    print(f"Name: {config.metadata.name}")
+    print(f"UUID: {experiment.uuid}")
+    print(f"Path: {experiment.path}")
+    print(f"Model Type: {config.model.type}")
+    print("="*80 + "\n")
     
     print("Creating data splits...")
     data_splits = create_data_splits(
@@ -524,7 +529,9 @@ def train_ddpm(config_path: str):
     voxel_library = VoxelLibrary(library_path)
     
     # Create experiment using ExperimentManager
-    print("Creating experiment...")
+    print("\n" + "="*80)
+    print("Creating Experiment")
+    print("="*80)
     exp_mgr = ExperimentManager()
     experiment = exp_mgr.create_experiment(
         name=config.metadata.name,
@@ -534,8 +541,11 @@ def train_ddpm(config_path: str):
         tags=[config.model.type, config.model.conditioning_strategy],
         dependencies={"vae_experiment": config.model.vae_experiment_uuid}
     )
-    print(f"Created experiment: {experiment.uuid}")
-    print(f"Experiment path: {experiment.path}")
+    print(f"Name: {config.metadata.name}")
+    print(f"UUID: {experiment.uuid}")
+    print(f"Path: {experiment.path}")
+    print(f"Model Type: {config.model.type}")
+    print("="*80 + "\n")
     
     print("Creating data splits...")
     data_splits = create_data_splits(

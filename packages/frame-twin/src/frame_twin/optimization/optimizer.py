@@ -103,12 +103,15 @@ class OptunaOptimizer:
         else:
             self.study.set_user_attr('pruner_type', 'none')
 
-        print(f"Starting optimization study: {self.config.optuna.study_name}")
-        print(f"  Parent experiment: {self.parent_experiment.uuid}")
-        print(f"  Storage: {storage_path}")
-        print(f"  Objectives: {[obj.name for obj in self.config.objectives]}")
-        print(f"  Directions: {directions}")
-        print(f"  Trials: {self.config.optuna.n_trials}")
+        print("\n" + "="*80)
+        print("Starting Optimization Study")
+        print("="*80)
+        print(f"Study: {self.config.optuna.study_name}")
+        print(f"Parent Experiment: {self.parent_experiment.uuid}")
+        print(f"Storage: {storage_path}")
+        print(f"Objectives: {[obj.name for obj in self.config.objectives]} ({', '.join(directions)})")
+        print(f"Total Trials: {self.config.optuna.n_trials}")
+        print("="*80 + "\n")
 
         # Run optimization
         self.study.optimize(
@@ -285,9 +288,15 @@ class OptunaOptimizer:
             # 7. Build and return objectives
             objectives = build_objective_tuple(metrics, self.config.objectives)
 
-            print(f"\nTrial {trial.number} complete:")
+            # Print trial completion
+            print("\n" + "─"*60)
+            print(f"Trial {trial.number} Complete")
+            if 'trial_uuid' in trial.user_attrs:
+                print(f"UUID: {trial.user_attrs['trial_uuid']}")
+            print("Objectives:")
             for obj_config, obj_value in zip(self.config.objectives, objectives):
                 print(f"  {obj_config.name}: {obj_value:.4f}")
+            print("─"*60 + "\n")
 
             return objectives
 
@@ -398,6 +407,13 @@ class OptunaOptimizer:
         trial_uuid = generate_uuid("trial")
         trial_dir = self.parent_experiment.path / "trials" / trial_uuid
         trial_dir.mkdir(parents=True, exist_ok=True)
+
+        # Print trial start information
+        print("\n" + "─"*60)
+        print(f"Trial {trial.number}")
+        print(f"UUID: {trial_uuid}")
+        print(f"Directory: {trial_dir.relative_to(self.parent_experiment.path)}")
+        print("─"*60 + "\n")
 
         # Create trial manifest (not registered in ExperimentManager)
         trial_manifest = {
