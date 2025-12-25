@@ -561,29 +561,24 @@ def handle_optuna_dashboard_command(args):
         experiment = opt_experiments[0]
         print(f"Using most recent optimization experiment: {experiment.name}")
 
-    manifest_path = experiment.path / "manifest.json"
-    if not manifest_path.exists():
-        print(f"Experiment manifest not found: {manifest_path}")
-        sys.exit(1)
-
-    with open(manifest_path, 'r') as f:
-        manifest = json.load(f)
-
-    optuna_db_path = manifest.get('optuna_study_db')
-    if not optuna_db_path:
-        optuna_db_path = experiment.path / "optuna_study.db"
-        if not optuna_db_path.exists():
-            print(f"No Optuna study database found for experiment {experiment.name}")
-            print(f"Expected location: {optuna_db_path}")
-            sys.exit(1)
-    else:
-        optuna_db_path = Path(optuna_db_path)
+    # Build database path from experiment directory (convention: optuna_study.db)
+    optuna_db_path = experiment.path / "optuna_study.db"
 
     if not optuna_db_path.exists():
-        print(f"Optuna study database not found: {optuna_db_path}")
+        print(f"Optuna study database not found for experiment {experiment.name}")
+        print(f"Expected location: {optuna_db_path}")
         sys.exit(1)
 
     db_url = f"sqlite:///{optuna_db_path}"
+
+    # Get study name from database
+    try:
+        import optuna
+        study_summaries = optuna.study.get_all_study_summaries(storage=db_url)
+        study_name = study_summaries[0].study_name if study_summaries else 'unknown'
+    except Exception:
+        study_name = 'unknown'
+
     od_cmd = [
         "optuna-dashboard",
         db_url,
@@ -593,7 +588,6 @@ def handle_optuna_dashboard_command(args):
     if args.bind_all:
         od_cmd.extend(["--host", "0.0.0.0"])
 
-    study_name = manifest.get('optuna_study_name', 'unknown')
     print(f"Starting Optuna Dashboard for optimization experiment: {experiment.name}")
     print(f"Study name: {study_name}")
     print(f"Database: {optuna_db_path}")
