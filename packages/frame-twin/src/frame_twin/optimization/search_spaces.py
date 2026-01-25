@@ -1,5 +1,6 @@
 """Search space utilities for Optuna optimization."""
 
+import json
 from typing import Dict, Any, List
 import optuna
 from frame_twin.config import SearchSpaceConfig, SearchSpaceParamConfig
@@ -41,17 +42,27 @@ def suggest_hyperparameters(
                 log=param_config.log
             )
         elif param_config.type == "categorical":
-            # Convert list choices to tuples (Optuna requires hashable types)
+            # Convert list/tuple choices to JSON strings for Optuna storage
+            # This avoids SQLite serialization issues where tuples become lists
+            # and then fail equality checks on subsequent trials
             processed_choices = []
+            has_complex_choices = False
             for c in param_config.choices:
-                if isinstance(c, list):
-                    processed_choices.append(tuple(c))
+                if isinstance(c, (list, tuple)):
+                    # Serialize complex types as JSON strings
+                    processed_choices.append(json.dumps(c))
+                    has_complex_choices = True
                 else:
                     processed_choices.append(c)
+            
             result = trial.suggest_categorical(name, processed_choices)
-            # Convert tuple back to list if needed
-            if isinstance(result, tuple):
-                return list(result)
+            
+            # Deserialize JSON strings back to lists if we had complex choices
+            if has_complex_choices and isinstance(result, str):
+                try:
+                    return json.loads(result)
+                except json.JSONDecodeError:
+                    return result
             return result
         else:
             raise ValueError(f"Unknown param type: {param_config.type}")
