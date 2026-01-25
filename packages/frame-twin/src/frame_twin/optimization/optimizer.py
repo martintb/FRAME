@@ -330,10 +330,13 @@ class OptunaOptimizer:
         finally:
             # Clean up CUDA resources after each trial to prevent accumulation
             gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                torch.cuda.synchronize()
-                torch.cuda.reset_peak_memory_stats()
+            try:
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    torch.cuda.synchronize()
+                    torch.cuda.reset_peak_memory_stats()
+            except Exception as exc:
+                print(f"Warning: CUDA cleanup failed: {exc}")
 
     def _create_trial_config(self, trial: optuna.Trial, params: Dict) -> Path:
         """Create trial-specific config and save to TOML.

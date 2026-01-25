@@ -317,6 +317,12 @@ class LoggingConfig(BaseModel):
     recon_compare_every_epochs: Optional[int] = Field(0, ge=0)  # Log reconstruction comparison every N epochs (0=disabled)
     analyze_latent_every_epochs: Optional[int] = Field(0, ge=0)  # Analyze latent space every N epochs (0=disabled)
     max_latent_analysis_samples: int = Field(128, gt=0)  # Max samples for latent histograms
+    ddpm_metrics_every_epochs: Optional[int] = Field(
+        1, ge=0, description="DDPM-only: compute sampling-based metrics every N epochs (0=disabled)"
+    )
+    ddpm_metrics_num_samples: int = Field(
+        16, gt=0, description="DDPM-only: number of samples for sampling-based metrics"
+    )
     
     # Advanced latent metrics (optional)
     log_latent_histograms: bool = Field(True, description="Enable/disable histogram logging for latent space")

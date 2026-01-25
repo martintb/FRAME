@@ -76,6 +76,8 @@ recon_compare_every_epochs = 5  # Generate sample visualizations
 analyze_latent_every_epochs = 0  # Disable (VAE-specific)
 compute_active_units = false  # Disable (VAE-specific)
 max_latent_analysis_samples = 16
+ddpm_metrics_every_epochs = 5  # Reduce sampling-heavy metrics frequency for Optuna
+ddpm_metrics_num_samples = 8   # Fewer samples to reduce GPU load
 
 # Search Space: 5 high-impact parameters for conservative exploration
 [search_space]

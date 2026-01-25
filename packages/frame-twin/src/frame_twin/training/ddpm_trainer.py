@@ -171,6 +171,7 @@ class DDPMTrainer(BaseTrainer):
         self.config = config
         self.vae = vae.to(device)
         self.conditioning_strategy = conditioning_strategy
+        self._last_ddpm_metrics: Dict[str, float] = {}
         
         # Move conditioning strategy to device (it has trainable parameters)
         if self.conditioning_strategy is not None:
@@ -291,6 +292,22 @@ class DDPMTrainer(BaseTrainer):
             batch_conditioning.append(conditioning)
         
         return torch.cat(batch_conditioning, dim=0)
+
+    def _get_unconditional_conditioning(self, batch_size: int) -> Optional[torch.Tensor]:
+        """Return a zero conditioning tensor for unconditional sampling when needed.
+
+        This is required for concatenation-based conditioning to keep input channel
+        counts consistent during sampling.
+        """
+        if self.conditioning_strategy is None:
+            return None
+        try:
+            conditioning_dim = int(self.conditioning_strategy.get_conditioning_dim())
+        except Exception:
+            conditioning_dim = 0
+        if conditioning_dim <= 0:
+            return None
+        return torch.zeros(batch_size, conditioning_dim, device=self.device)
     
     def train(self, start_epoch: int = 0, epoch_callback=None) -> None:
         """Train the DDPM model.
@@ -368,18 +385,33 @@ class DDPMTrainer(BaseTrainer):
 
         # Compute additional DDPM-specific metrics for Optuna
         # These are computed only if we have validation data
-        if len(self.val_loader) > 0:
+        metrics_every = getattr(self.config.logging, 'ddpm_metrics_every_epochs', 1) or 0
+        if metrics_every > 0 and (self.current_epoch % metrics_every == 0) and len(self.val_loader) > 0:
+            num_samples = int(getattr(self.config.logging, 'ddpm_metrics_num_samples', 16))
+            num_samples = max(num_samples, 1)
+
             # Latent reconstruction error
-            latent_recon_error = self._compute_latent_reconstruction_error()
+            latent_recon_error = self._compute_latent_reconstruction_error(num_samples=num_samples)
             epoch_metrics['latent_reconstruction_error'] = latent_recon_error
 
             # Generation time per sample
-            gen_time = self._measure_generation_time()
+            time_samples = min(4, num_samples) if num_samples > 0 else 1
+            gen_time = self._measure_generation_time(num_samples=time_samples)
             epoch_metrics['generation_time_per_sample'] = gen_time
 
             # Sample diversity score
-            diversity = self._compute_sample_diversity()
+            diversity_samples = max(num_samples, 2)
+            diversity = self._compute_sample_diversity(num_samples=diversity_samples)
             epoch_metrics['sample_diversity_score'] = diversity
+
+            self._last_ddpm_metrics = {
+                'latent_reconstruction_error': latent_recon_error,
+                'generation_time_per_sample': gen_time,
+                'sample_diversity_score': diversity
+            }
+        elif self._last_ddpm_metrics:
+            # Carry forward last computed metrics so checkpoint metrics are stable for Optuna
+            epoch_metrics.update(self._last_ddpm_metrics)
 
         return epoch_metrics
 
@@ -450,12 +482,13 @@ class DDPMTrainer(BaseTrainer):
 
         import time
         times = []
+        conditioning = self._get_unconditional_conditioning(1)
         with torch.no_grad():
             for _ in range(num_samples):
                 start = time.time()
                 _ = self.model.p_sample_loop(
                     latent_shape,
-                    conditioning=None,
+                    conditioning=conditioning,
                     cfg_scale=1.0,
                     show_progress=False
                 )
@@ -482,10 +515,11 @@ class DDPMTrainer(BaseTrainer):
         latent_channels = self.model.out_channels
         latent_shape = (num_samples, latent_channels, 16, 16, 16)
 
+        conditioning = self._get_unconditional_conditioning(num_samples)
         with torch.no_grad():
             samples = self.model.p_sample_loop(
                 latent_shape,
-                conditioning=None,
+                conditioning=conditioning,
                 cfg_scale=1.0,
                 show_progress=False
             )
