@@ -1,0 +1,181 @@
+# DDPM Optuna Hyperparameter Optimization Configuration
+# Conservative search space for 25-50 trial budget
+# Target: ~100-200 GPU hours
+
+[metadata]
+name = "ddpm_hp_search_conservative"
+random_seed = 42
+
+[optuna]
+study_name = "ddpm_latent_diffusion_small"
+n_trials = 50
+sampler = "tpe"  # Tree-structured Parzen Estimator (efficient)
+pruner = "median"  # Aggressive pruning for trial budget
+n_startup_trials = 5
+n_warmup_steps = 5  # Shorter warmup for DDPM
+
+[data]
+# Update these to match your dataset
+library_uuid = "lib_17adb8df5a19"  # Example: lnp_1k_10ch_lhs library
+split_strategy = "random"
+train_ratio = 0.8
+val_ratio = 0.1
+test_ratio = 0.1
+
+# Data augmentation
+random_crop_size = 64
+random_rotation = true
+reject_bg_only_crops = true
+bg_channel_name = "water"
+max_bg_crop_attempts = 32
+
+model_type = "ddpm"
+
+[base_model]
+# Fixed DDPM parameters
+type = "ddpm"
+vae_experiment_uuid = "exp_REPLACE_WITH_YOUR_VAE_UUID"  # REQUIRED: Pre-trained VAE
+# vae_trial_uuid = "trial_xyz789"  # Optional: specific trial within the VAE experiment (defaults to experiment's best checkpoint)
+freeze_vae = true
+# latent_channels will be inferred from VAE (typically 32)
+
+# Fixed architecture (not optimized for conservative search)
+timesteps = 1000  # Fixed
+unet_channels = [32, 64, 128, 256]  # Fixed channel schedule
+attention_resolutions = [8, 16]  # Fixed attention locations
+num_res_blocks = 2  # Fixed
+dropout = 0.1  # Fixed
+
+[base_model.conditioning]
+# Conditioning config (param_embedding_dim NOT optimized for conservative search)
+param_embedding_dim = 128  # Fixed
+film_hidden_dim = 256  # Used when conditioning_strategy="film"
+num_attention_heads = 8  # Used when conditioning_strategy="cross_attention"
+num_attention_layers = 4
+use_adaptive_group_norm = true  # Used when conditioning_strategy="adaptive_norm"
+
+[base_training]
+# Fixed training parameters
+device = "cuda"
+num_epochs = 20  # Conservative: 20 epochs per trial for speed
+num_workers = 4
+distributed = false
+
+[base_loss]
+loss_type = "mse"  # Fixed (MSE typically better for diffusion)
+
+[base_checkpointing]
+save_every_epochs = 100  # Save infrequently
+save_every_minutes = 120
+keep_last_n = 1  # Keep only last checkpoint to save space
+save_best = false
+
+[base_logging]
+log_every_steps = 20
+recon_compare_every_epochs = 5  # Generate sample visualizations
+analyze_latent_every_epochs = 0  # Disable (VAE-specific)
+compute_active_units = false  # Disable (VAE-specific)
+max_latent_analysis_samples = 16
+
+# Search Space: 5 high-impact parameters for conservative exploration
+[search_space]
+
+# TIER 1: Learning rate (critical)
+[search_space.learning_rate]
+type = "float"
+min = 5.0e-5  # Narrower range than full exploration
+max = 5.0e-4
+log = true
+
+# TIER 1: Batch size (memory vs quality)
+[search_space.batch_size]
+type = "categorical"
+choices = [4, 8]  # Conservative: only 2 options
+
+# TIER 1: Conditioning strategy (architectural choice)
+[search_space.conditioning_strategy]
+type = "categorical"
+choices = ["none", "concat", "film", "adaptive_norm"]  # Exclude cross_attention (slower)
+
+# TIER 2: Beta schedule (quality impact)
+[search_space.beta_schedule]
+type = "categorical"
+choices = ["linear", "cosine"]
+
+# TIER 2: Conditioning dropout (for CFG training)
+[search_space.conditioning_dropout]
+type = "float"
+min = 0.0
+max = 0.15
+log = false
+
+# Optimization Objectives: 3 objectives (quality, quality, speed)
+[[objectives]]
+name = "val_loss"
+direction = "minimize"
+weight = 1.0
+
+[[objectives]]
+name = "latent_reconstruction_error"
+direction = "minimize"
+weight = 1.0
+
+[[objectives]]
+name = "generation_time_per_sample"
+direction = "minimize"
+weight = 0.5  # Lower priority than quality
+
+# Optional 4th objective (commented out for conservative search)
+# [[objectives]]
+# name = "sample_diversity_score"
+# direction = "maximize"
+# weight = 0.8
+
+# ============================================================================
+# MORE AGGRESSIVE SEARCH SPACE (for larger trial budgets: 100+ trials)
+# ============================================================================
+# Uncomment these sections to expand the search space for more thorough exploration
+
+# Channel schedules: Use list of lists for direct channel configurations
+# [search_space.unet_channels]
+# type = "categorical"
+# choices = [[32, 64, 128, 256], [48, 96, 192, 384], [64, 128, 256, 512]]
+#
+# OR use scalar base channels with default multipliers [1, 2, 4, 8]:
+# [search_space.unet_channels]
+# type = "categorical"
+# choices = [32, 48, 64]  # Results in [32,64,128,256], [48,96,192,384], [64,128,256,512]
+
+# [search_space.timesteps]
+# type = "categorical"
+# choices = [500, 1000, 2000]
+
+# [search_space.optimizer]
+# type = "categorical"
+# choices = ["adam", "adamw"]
+
+# [search_space.param_embedding_dim]
+# type = "categorical"
+# choices = [64, 128, 256]
+
+# [search_space.attention_resolutions]
+# type = "categorical"
+# choices = [[8], [8, 16], [16]]
+
+# [search_space.dropout]
+# type = "float"
+# min = 0.0
+# max = 0.3
+# log = false
+
+# [search_space.grad_clip]
+# type = "float"
+# min = 0.5
+# max = 2.0
+# log = false
+
+# [search_space.scheduler]
+# type = "categorical"
+# choices = ["cosine", "step", "none"]
+
+# With 10+ parameters, expect ~150-200 trials for good coverage

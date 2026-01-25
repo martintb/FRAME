@@ -1039,7 +1039,7 @@ test_ratio = 0.1
 
 [model]
 type = "ddpm"
-conditioning_strategy = "film"  # Options: "concat", "cross_attention", "adaptive_norm", "film"
+conditioning_strategy = "film"  # Options: "none", "concat", "cross_attention", "adaptive_norm", "film"
 vae_experiment_uuid = "REPLACE_WITH_VAE_EXPERIMENT_UUID"  # Reference VAE experiment by UUID
 freeze_vae = true
 latent_channels = 8

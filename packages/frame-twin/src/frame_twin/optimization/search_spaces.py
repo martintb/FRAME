@@ -11,6 +11,8 @@ def suggest_hyperparameters(
 ) -> Dict[str, Any]:
     """Suggest hyperparameters for a trial based on search space configuration.
 
+    Supports both VAE and DDPM parameters.
+
     Args:
         trial: Optuna trial object
         search_space: Search space configuration
@@ -39,11 +41,22 @@ def suggest_hyperparameters(
                 log=param_config.log
             )
         elif param_config.type == "categorical":
-            return trial.suggest_categorical(name, param_config.choices)
+            # Convert list choices to tuples (Optuna requires hashable types)
+            processed_choices = []
+            for c in param_config.choices:
+                if isinstance(c, list):
+                    processed_choices.append(tuple(c))
+                else:
+                    processed_choices.append(c)
+            result = trial.suggest_categorical(name, processed_choices)
+            # Convert tuple back to list if needed
+            if isinstance(result, tuple):
+                return list(result)
+            return result
         else:
             raise ValueError(f"Unknown param type: {param_config.type}")
 
-    # Suggest each configured parameter
+    # VAE parameters
     if search_space.latent_channels is not None:
         params['latent_channels'] = suggest_param('latent_channels', search_space.latent_channels)
 
@@ -77,6 +90,52 @@ def suggest_hyperparameters(
     if search_space.batch_size is not None:
         params['batch_size'] = suggest_param('batch_size', search_space.batch_size)
 
+    # DDPM parameters
+    if search_space.unet_channels is not None:
+        params['unet_channels'] = suggest_param('unet_channels', search_space.unet_channels)
+
+    if search_space.timesteps is not None:
+        params['timesteps'] = suggest_param('timesteps', search_space.timesteps)
+
+    if search_space.beta_schedule is not None:
+        params['beta_schedule'] = suggest_param('beta_schedule', search_space.beta_schedule)
+
+    if search_space.unet_channel_multipliers is not None:
+        params['unet_channel_multipliers'] = suggest_param('unet_channel_multipliers', search_space.unet_channel_multipliers)
+
+    if search_space.attention_resolutions is not None:
+        params['attention_resolutions'] = suggest_param('attention_resolutions', search_space.attention_resolutions)
+
+    if search_space.num_res_blocks is not None:
+        params['num_res_blocks'] = suggest_param('num_res_blocks', search_space.num_res_blocks)
+
+    if search_space.dropout is not None:
+        params['dropout'] = suggest_param('dropout', search_space.dropout)
+
+    if search_space.conditioning_strategy is not None:
+        params['conditioning_strategy'] = suggest_param('conditioning_strategy', search_space.conditioning_strategy)
+
+    if search_space.param_embedding_dim is not None:
+        params['param_embedding_dim'] = suggest_param('param_embedding_dim', search_space.param_embedding_dim)
+
+    if search_space.film_hidden_dim is not None:
+        params['film_hidden_dim'] = suggest_param('film_hidden_dim', search_space.film_hidden_dim)
+
+    if search_space.conditioning_dropout is not None:
+        params['conditioning_dropout'] = suggest_param('conditioning_dropout', search_space.conditioning_dropout)
+
+    if search_space.cfg_scale is not None:
+        params['cfg_scale'] = suggest_param('cfg_scale', search_space.cfg_scale)
+
+    if search_space.loss_type is not None:
+        params['loss_type'] = suggest_param('loss_type', search_space.loss_type)
+
+    if search_space.grad_clip is not None:
+        params['grad_clip'] = suggest_param('grad_clip', search_space.grad_clip)
+
+    if search_space.scheduler is not None:
+        params['scheduler'] = suggest_param('scheduler', search_space.scheduler)
+
     return params
 
 
@@ -100,3 +159,18 @@ def compute_channel_schedule(params: Dict[str, Any]) -> List[int]:
         return [base_channels, base_channels * 2, base_channels * 4, base_channels * 8]
     else:
         raise ValueError(f"Unknown channel_schedule_type: {schedule_type}")
+
+
+def compute_unet_channels(params: Dict[str, Any]) -> List[int]:
+    """Compute UNet channel list from suggested parameters.
+
+    Args:
+        params: Dict of suggested hyperparameters
+
+    Returns:
+        List of channel sizes for each level
+    """
+    base_channels = params.get('unet_channels', 32)
+    multipliers = params.get('unet_channel_multipliers', [1, 2, 4, 8])
+
+    return [base_channels * m for m in multipliers]

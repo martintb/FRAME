@@ -23,8 +23,11 @@ class DDPMTrainer(BaseTrainer):
     """Trainer for DDPM models."""
     
     def __init__(self, config: DDPMConfig, experiment=None):
-        # Resolve VAE checkpoint path (supports experiment UUID or direct path)
-        vae_checkpoint_path = self._resolve_checkpoint_path(config.model.vae_experiment_uuid)
+        # Resolve VAE checkpoint path (supports experiment UUID or direct path, optionally with trial UUID)
+        vae_checkpoint_path = self._resolve_checkpoint_path(
+            config.model.vae_experiment_uuid,
+            trial_uuid=config.model.vae_trial_uuid
+        )
         
         # Load VAE (supports both VAE and UNetVAE)
         vae_checkpoint = torch.load(vae_checkpoint_path, map_location='cpu')
@@ -175,6 +178,9 @@ class DDPMTrainer(BaseTrainer):
     
     def _create_conditioning_strategy(self, config: DDPMConfig):
         """Create conditioning strategy based on config."""
+        if config.model.conditioning_strategy == "none":
+            return None
+        
         conditioning_config = config.model.conditioning
         
         if config.model.conditioning_strategy == "concat":
@@ -271,8 +277,11 @@ class DDPMTrainer(BaseTrainer):
         
         return loss, metrics
     
-    def _encode_parameters_batch(self, parameters: list) -> torch.Tensor:
+    def _encode_parameters_batch(self, parameters: list) -> Optional[torch.Tensor]:
         """Encode a batch of parameter dictionaries."""
+        if self.conditioning_strategy is None:
+            return None
+        
         batch_conditioning = []
         
         for param_dict in parameters:
@@ -283,12 +292,17 @@ class DDPMTrainer(BaseTrainer):
         
         return torch.cat(batch_conditioning, dim=0)
     
-    def train(self, start_epoch: int = 0) -> None:
-        """Train the DDPM model."""
+    def train(self, start_epoch: int = 0, epoch_callback=None) -> None:
+        """Train the DDPM model.
+
+        Args:
+            start_epoch: Epoch to start from (for resuming)
+            epoch_callback: Optional callback called after each epoch with (epoch, val_metrics)
+        """
         if self.train_loader is None or self.val_loader is None:
             raise ValueError("Data loaders must be set before training")
-        
-        super().train(start_epoch)
+
+        super().train(start_epoch, epoch_callback=epoch_callback)
     
     def generate_samples(
         self,
@@ -310,7 +324,7 @@ class DDPMTrainer(BaseTrainer):
         
         with torch.no_grad():
             # Encode conditioning
-            if conditioning is not None:
+            if conditioning is not None and self.conditioning_strategy is not None:
                 conditioning_tensor = self.conditioning_strategy.encode_parameters(
                     conditioning, self.device
                 )
@@ -338,19 +352,157 @@ class DDPMTrainer(BaseTrainer):
     
     def validate_epoch(self) -> Dict[str, float]:
         """Validate for one epoch.
-        
+
+        Computes enhanced metrics for Optuna optimization:
+        - val_loss (from base class)
+        - latent_reconstruction_error
+        - generation_time_per_sample
+        - sample_diversity_score
+
         Note: Sample generation now happens only during image logging
         to avoid duplicate expensive DDPM sampling. Sample statistics
         are computed and logged during _log_reconstruction_images.
         """
         # Call base class validation (handles step-based logging)
         epoch_metrics = super().validate_epoch()
-        
-        # Sample statistics will be computed during image logging
-        # (see _log_reconstruction_images which is called by base trainer)
-        # This avoids doing 1000-step sampling twice per epoch
-        
+
+        # Compute additional DDPM-specific metrics for Optuna
+        # These are computed only if we have validation data
+        if len(self.val_loader) > 0:
+            # Latent reconstruction error
+            latent_recon_error = self._compute_latent_reconstruction_error()
+            epoch_metrics['latent_reconstruction_error'] = latent_recon_error
+
+            # Generation time per sample
+            gen_time = self._measure_generation_time()
+            epoch_metrics['generation_time_per_sample'] = gen_time
+
+            # Sample diversity score
+            diversity = self._compute_sample_diversity()
+            epoch_metrics['sample_diversity_score'] = diversity
+
         return epoch_metrics
+
+    def _compute_latent_reconstruction_error(self, num_samples: int = 16) -> float:
+        """Compute reconstruction error in latent space.
+
+        Compares real encoded latents vs. DDPM-generated latents
+        to measure how well DDPM matches the real data distribution.
+
+        Args:
+            num_samples: Number of validation samples to test
+
+        Returns:
+            Mean squared error between real and generated latents
+        """
+        self.model.eval()
+        self.vae.eval()
+
+        errors = []
+        with torch.no_grad():
+            for i, batch in enumerate(self.val_loader):
+                if i >= num_samples // self.training_config.batch_size:
+                    break
+
+                voxels = batch['voxels'].to(self.device)
+                parameters = batch['parameters']
+
+                # Encode real voxels to latent
+                real_latents = self.vae.encode(voxels)
+
+                # Encode conditioning
+                conditioning = self._encode_parameters_batch(parameters)
+
+                # Generate samples in latent space
+                latent_shape = real_latents.shape
+                generated_latents = self.model.p_sample_loop(
+                    latent_shape,
+                    conditioning,
+                    cfg_scale=getattr(self.config.model, 'cfg_scale', 1.0),
+                    show_progress=False
+                )
+
+                # Compute MSE
+                import torch.nn.functional as F
+                error = F.mse_loss(generated_latents, real_latents)
+                errors.append(error.item())
+
+        self.model.train()
+        if not self.config.model.freeze_vae:
+            self.vae.train()
+
+        return float(np.mean(errors)) if errors else 0.0
+
+    def _measure_generation_time(self, num_samples: int = 4) -> float:
+        """Measure average time to generate one sample.
+
+        Args:
+            num_samples: Number of samples to time
+
+        Returns:
+            Average time per sample in seconds
+        """
+        self.model.eval()
+
+        # Get latent shape from model
+        latent_channels = self.model.out_channels
+        latent_shape = (1, latent_channels, 16, 16, 16)
+
+        import time
+        times = []
+        with torch.no_grad():
+            for _ in range(num_samples):
+                start = time.time()
+                _ = self.model.p_sample_loop(
+                    latent_shape,
+                    conditioning=None,
+                    cfg_scale=1.0,
+                    show_progress=False
+                )
+                times.append(time.time() - start)
+
+        self.model.train()
+
+        return float(np.mean(times))
+
+    def _compute_sample_diversity(self, num_samples: int = 32) -> float:
+        """Compute average pairwise distance between samples (diversity metric).
+
+        Generates samples and measures diversity in latent space to detect mode collapse.
+
+        Args:
+            num_samples: Number of samples to generate
+
+        Returns:
+            Average pairwise L2 distance in latent space
+        """
+        self.model.eval()
+
+        # Get latent shape from model
+        latent_channels = self.model.out_channels
+        latent_shape = (num_samples, latent_channels, 16, 16, 16)
+
+        with torch.no_grad():
+            samples = self.model.p_sample_loop(
+                latent_shape,
+                conditioning=None,
+                cfg_scale=1.0,
+                show_progress=False
+            )
+
+            # Flatten spatial dims
+            samples_flat = samples.view(num_samples, -1)
+
+            # Compute pairwise distances
+            dists = torch.cdist(samples_flat, samples_flat, p=2)
+
+            # Average (exclude diagonal)
+            mask = ~torch.eye(num_samples, dtype=torch.bool, device=dists.device)
+            avg_dist = dists[mask].mean().item()
+
+        self.model.train()
+
+        return float(avg_dist)
     
     def _get_model_config(self) -> Dict[str, Any]:
         """Get DDPM model configuration."""
@@ -386,7 +538,7 @@ class DDPMTrainer(BaseTrainer):
         
         # Encode conditioning from selected sample if available
         conditioning_tensor = None
-        if parameters is not None and len(parameters) > 0:
+        if parameters is not None and len(parameters) > 0 and self.conditioning_strategy is not None:
             conditioning_tensor = self.conditioning_strategy.encode_parameters(
                 parameters[sample_idx], self.device
             )  # Already shaped (B, dim); for single sample returns (1, dim)
@@ -512,16 +664,18 @@ class DDPMTrainer(BaseTrainer):
             torch.mps.empty_cache()
     
     @staticmethod
-    def _resolve_checkpoint_path(checkpoint_ref: str) -> Path:
+    def _resolve_checkpoint_path(checkpoint_ref: str, trial_uuid: Optional[str] = None) -> Path:
         """Resolve checkpoint reference to actual path.
         
         Supports:
         - Experiment UUID (e.g., 'exp_537908480581') -> resolves to best checkpoint
+        - Experiment UUID + trial UUID -> resolves to trial's best checkpoint
         - Checkpoint UUID (e.g., 'ckpt_abc123') -> resolves to checkpoint path
         - Direct file path -> returned as-is
         
         Args:
             checkpoint_ref: Experiment UUID, checkpoint UUID, or direct path
+            trial_uuid: Optional trial UUID (trial_*) within the experiment
             
         Returns:
             Path to checkpoint file
@@ -541,16 +695,23 @@ class DDPMTrainer(BaseTrainer):
         if checkpoint_ref.startswith('exp_'):
             config = get_config()
             exp_mgr = ExperimentManager()
-            experiment = exp_mgr.get_experiment(checkpoint_ref)
+            experiment = exp_mgr.get_experiment(checkpoint_ref, trial_uuid=trial_uuid)
             
             if experiment is None:
-                raise FileNotFoundError(
-                    f"Experiment '{checkpoint_ref}' not found in {config.experiments_path}"
-                )
+                if trial_uuid:
+                    raise FileNotFoundError(
+                        f"Trial '{trial_uuid}' not found in experiment '{checkpoint_ref}' "
+                        f"in {config.experiments_path}"
+                    )
+                else:
+                    raise FileNotFoundError(
+                        f"Experiment '{checkpoint_ref}' not found in {config.experiments_path}"
+                    )
             
             if experiment.best_checkpoint is None:
+                experiment_label = f"'{checkpoint_ref}'" + (f" (trial {trial_uuid})" if trial_uuid else "")
                 raise ValueError(
-                    f"Experiment '{checkpoint_ref}' has no best checkpoint set. "
+                    f"Experiment {experiment_label} has no best checkpoint set. "
                     f"Use 'frame checkpoint set-best' to mark one."
                 )
             
@@ -562,8 +723,9 @@ class DDPMTrainer(BaseTrainer):
             )
             
             if checkpoint is None:
+                experiment_label = f"'{checkpoint_ref}'" + (f" (trial {trial_uuid})" if trial_uuid else "")
                 raise FileNotFoundError(
-                    f"Best checkpoint '{experiment.best_checkpoint}' not found for experiment '{checkpoint_ref}'"
+                    f"Best checkpoint '{experiment.best_checkpoint}' not found for experiment {experiment_label}"
                 )
             
             return checkpoint.checkpoint_path

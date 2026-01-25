@@ -152,8 +152,12 @@ class Sampler:
     @staticmethod
     def _create_conditioning_strategy_from_config(ddpm_config: Dict[str, Any]):
         """Recreate conditioning strategy from config."""
-        conditioning_config = ddpm_config['conditioning']
         conditioning_strategy = ddpm_config['conditioning_strategy']
+        
+        if conditioning_strategy == "none":
+            return None
+        
+        conditioning_config = ddpm_config['conditioning']
         
         # Default parameter names
         parameter_names = [
@@ -224,7 +228,7 @@ class Sampler:
         """
         with torch.no_grad():
             # Encode conditioning
-            if conditioning is not None:
+            if conditioning is not None and self.ddpm.conditioning_strategy is not None:
                 conditioning_tensor = self.ddpm.conditioning_strategy.encode_parameters(
                     conditioning, self.device
                 )
