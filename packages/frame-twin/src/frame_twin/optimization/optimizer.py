@@ -1,4 +1,4 @@
-"""Optuna optimizer for VAE hyperparameter search."""
+"""Optuna optimizer for VAE and DDPM hyperparameter search."""
 
 import json
 import tempfile
@@ -9,18 +9,25 @@ import optuna
 import pandas as pd
 
 from frame.management import ExperimentManager, CheckpointManager
-from frame_twin.config import OptimizationConfig, VAEConfig, VAEModelConfig, HVAEModelConfig
-from frame_twin.training import VAETrainer
+from frame_twin.config import (
+    OptimizationConfig,
+    VAEConfig,
+    DDPMConfig,
+    VAEModelConfig,
+    HVAEModelConfig,
+    DDPMModelConfig
+)
+from frame_twin.training import VAETrainer, DDPMTrainer
 from frame_twin.data import create_data_splits, create_data_loaders
 from frame.storage import VoxelLibrary
 
 from .objectives import build_objective_tuple, get_optuna_directions
-from .search_spaces import suggest_hyperparameters, compute_channel_schedule
+from .search_spaces import suggest_hyperparameters, compute_channel_schedule, compute_unet_channels
 from .pruning import OptunaPruningCallback
 
 
 class OptunaOptimizer:
-    """Manages Optuna hyperparameter optimization for VAE training."""
+    """Manages Optuna hyperparameter optimization for VAE and DDPM training."""
 
     def __init__(self, config: OptimizationConfig, config_path: Optional[Path] = None):
         """Initialize optimizer.
@@ -320,6 +327,25 @@ class OptunaOptimizer:
             return tuple(worst_values)
 
     def _create_trial_config(self, trial: optuna.Trial, params: Dict) -> Path:
+        """Create trial-specific config and save to TOML.
+
+        Dispatches to model-specific config creation methods.
+
+        Args:
+            trial: Optuna trial
+            params: Suggested hyperparameters
+
+        Returns:
+            Path to trial config TOML file
+        """
+        if self.config.model_type in ["vae", "unet_vae", "hvae"]:
+            return self._create_vae_trial_config(trial, params)
+        elif self.config.model_type == "ddpm":
+            return self._create_ddpm_trial_config(trial, params)
+        else:
+            raise ValueError(f"Unknown model_type: {self.config.model_type}")
+
+    def _create_vae_trial_config(self, trial: optuna.Trial, params: Dict) -> Path:
         """Create trial-specific VAEConfig and save to TOML.
 
         Args:
@@ -365,6 +391,120 @@ class OptunaOptimizer:
 
         if 'batch_size' in params:
             training_config_dict['batch_size'] = params['batch_size']
+
+        # Build complete config dict
+        config_dict = {
+            'metadata': {
+                'name': f"{self.config.metadata.name}_trial_{trial.number}",
+                'random_seed': self.config.metadata.random_seed
+            },
+            'data': self.config.data.dict(),
+            'model': model_config_dict,
+            'training': training_config_dict,
+            'loss': loss_config_dict,
+            'checkpointing': self.config.base_checkpointing.dict(),
+            'logging': self.config.base_logging.dict()
+        }
+
+        # Save to temporary TOML file
+        temp_dir = Path(tempfile.mkdtemp(prefix=f"optuna_trial_{trial.number}_"))
+        config_path = temp_dir / "config.toml"
+
+        with open(config_path, 'wb') as f:
+            tomli_w.dump(self._remove_nones(config_dict), f)
+
+        return config_path
+
+    def _create_ddpm_trial_config(self, trial: optuna.Trial, params: Dict) -> Path:
+        """Create trial-specific DDPMConfig and save to TOML.
+
+        Args:
+            trial: Optuna trial
+            params: Suggested hyperparameters
+
+        Returns:
+            Path to trial config TOML file
+        """
+        # Start with base configs
+        model_config_dict = self.config.base_model.dict()
+        training_config_dict = self.config.base_training.dict()
+        loss_config_dict = self.config.base_loss.dict()
+
+        # Apply suggested hyperparameters
+
+        # Architecture parameters
+        if 'unet_channels' in params:
+            # If unet_channel_multipliers is also specified, compute full channel list
+            if 'unet_channel_multipliers' in params:
+                unet_channels_list = compute_unet_channels(params)
+                model_config_dict['unet_channels'] = unet_channels_list
+            else:
+                # Just update the base channels, keep existing multipliers
+                base_channels = params['unet_channels']
+                existing_multipliers = model_config_dict.get('unet_channels', [32, 64, 128, 256])
+                # Infer multipliers from existing channel list
+                if existing_multipliers:
+                    old_base = existing_multipliers[0]
+                    multipliers = [c // old_base for c in existing_multipliers]
+                    model_config_dict['unet_channels'] = [base_channels * m for m in multipliers]
+                else:
+                    model_config_dict['unet_channels'] = [base_channels, base_channels * 2, base_channels * 4, base_channels * 8]
+
+        if 'timesteps' in params:
+            model_config_dict['timesteps'] = params['timesteps']
+
+        if 'beta_schedule' in params:
+            model_config_dict['beta_schedule'] = params['beta_schedule']
+
+        if 'attention_resolutions' in params:
+            model_config_dict['attention_resolutions'] = params['attention_resolutions']
+
+        if 'num_res_blocks' in params:
+            model_config_dict['num_res_blocks'] = params['num_res_blocks']
+
+        if 'dropout' in params:
+            model_config_dict['dropout'] = params['dropout']
+
+        # Conditioning parameters
+        if 'conditioning_strategy' in params:
+            model_config_dict['conditioning_strategy'] = params['conditioning_strategy']
+
+        # Update conditioning config if it exists
+        conditioning_config = model_config_dict.get('conditioning', {})
+        if isinstance(conditioning_config, dict):
+            if 'param_embedding_dim' in params:
+                conditioning_config['param_embedding_dim'] = params['param_embedding_dim']
+
+            if 'film_hidden_dim' in params:
+                conditioning_config['film_hidden_dim'] = params['film_hidden_dim']
+
+            model_config_dict['conditioning'] = conditioning_config
+
+        if 'conditioning_dropout' in params:
+            model_config_dict['conditioning_dropout'] = params['conditioning_dropout']
+
+        if 'cfg_scale' in params:
+            model_config_dict['cfg_scale'] = params['cfg_scale']
+
+        # Training parameters
+        if 'learning_rate' in params:
+            training_config_dict['learning_rate'] = params['learning_rate']
+
+        if 'batch_size' in params:
+            training_config_dict['batch_size'] = params['batch_size']
+
+        if 'optimizer' in params:
+            training_config_dict['optimizer'] = params['optimizer']
+
+        if 'scheduler' in params:
+            training_config_dict['scheduler'] = params['scheduler']
+
+        if 'grad_clip' in params:
+            training_config_dict['grad_clip'] = params['grad_clip']
+
+        # Loss parameters
+        if 'loss_type' in params:
+            loss_config_dict['loss_type'] = params['loss_type']
 
         # Build complete config dict
         config_dict = {
@@ -685,6 +825,23 @@ class OptunaOptimizer:
             json.dump(manifest, f, indent=2)
 
     def _train_trial(self, config_path: Path, trial_exp, pruning_callback=None):
+        """Run training for a trial (VAE or DDPM).
+
+        Dispatches to model-specific training methods.
+
+        Args:
+            config_path: Path to trial config TOML
+            trial_exp: Trial experiment object (SimpleNamespace)
+            pruning_callback: Optional callback for pruning unpromising trials
+        """
+        if self.config.model_type in ["vae", "unet_vae", "hvae"]:
+            self._train_vae_trial(config_path, trial_exp, pruning_callback)
+        elif self.config.model_type == "ddpm":
+            self._train_ddpm_trial(config_path, trial_exp, pruning_callback)
+        else:
+            raise ValueError(f"Unknown model_type: {self.config.model_type}")
+
+    def _train_vae_trial(self, config_path: Path, trial_exp, pruning_callback=None):
         """Run VAE training for a trial (adapted from train_vae in cli.py).
 
         Args:
@@ -735,6 +892,62 @@ class OptunaOptimizer:
 
         # Initialize trainer with trial experiment
         trainer = VAETrainer(config, experiment=trial_exp)
+        trainer.set_data_loaders(train_loader, val_loader)
+
+        # Run training with epoch callback for pruning
+        trainer.train(epoch_callback=pruning_callback)
+
+    def _train_ddpm_trial(self, config_path: Path, trial_exp, pruning_callback=None):
+        """Run DDPM training for a trial (adapted from train_ddpm in cli.py).
+
+        Args:
+            config_path: Path to trial config TOML
+            trial_exp: Trial experiment object (SimpleNamespace)
+            pruning_callback: Optional callback for pruning unpromising trials
+        """
+        from frame_twin.cli import _resolve_library_path, _resolve_background_params
+
+        # Load config
+        config = DDPMConfig.from_toml(str(config_path))
+
+        # Resolve library path and load voxel library
+        library_path, library_uuid = _resolve_library_path(config.data.library_uuid)
+        voxel_library = VoxelLibrary(library_path)
+
+        # Create data splits
+        data_splits = create_data_splits(
+            voxel_library=voxel_library,
+            split_strategy=config.data.split_strategy,
+            train_ratio=config.data.train_ratio,
+            val_ratio=config.data.val_ratio,
+            test_ratio=config.data.test_ratio,
+            stratify_params=config.data.stratify_params,
+            random_seed=config.metadata.random_seed
+        )
+
+        # Create data loaders
+        pin_memory = config.training.device == "cuda"
+        reject_bg, bg_channel_index, max_bg_attempts, bg_tol = _resolve_background_params(config.data, voxel_library)
+
+        loaders = create_data_loaders(
+            voxel_library=voxel_library,
+            data_splits=data_splits,
+            batch_size=config.training.batch_size,
+            device=None,
+            num_workers=config.training.num_workers,
+            pin_memory=pin_memory,
+            random_crop_size=config.data.random_crop_size,
+            random_rotation=config.data.random_rotation,
+            reject_bg_only_crops=reject_bg,
+            bg_channel_index=bg_channel_index,
+            max_bg_crop_attempts=max_bg_attempts,
+            bg_only_tolerance=bg_tol
+        )
+        train_loader = loaders['train']
+        val_loader = loaders['val']
+
+        # Initialize trainer with trial experiment
+        trainer = DDPMTrainer(config, experiment=trial_exp)
         trainer.set_data_loaders(train_loader, val_loader)
 
         # Run training with epoch callback for pruning

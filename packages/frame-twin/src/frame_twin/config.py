@@ -430,8 +430,10 @@ class SearchSpaceParamConfig(BaseModel):
 class SearchSpaceConfig(BaseModel):
     """Hyperparameter search space definition.
 
+    Supports both VAE and DDPM parameters.
     Each field can be a SearchSpaceParamConfig dict or None to skip optimization.
     """
+    # VAE parameters
     latent_channels: Optional[SearchSpaceParamConfig] = None
     channel_schedule_type: Optional[SearchSpaceParamConfig] = None  # shallow, medium, deep
     base_channels: Optional[SearchSpaceParamConfig] = None
@@ -444,6 +446,23 @@ class SearchSpaceConfig(BaseModel):
     optimizer: Optional[SearchSpaceParamConfig] = None
     batch_size: Optional[SearchSpaceParamConfig] = None
 
+    # DDPM parameters
+    unet_channels: Optional[SearchSpaceParamConfig] = None  # Base channel count
+    timesteps: Optional[SearchSpaceParamConfig] = None  # Number of diffusion steps
+    beta_schedule: Optional[SearchSpaceParamConfig] = None  # linear, cosine
+    unet_channel_multipliers: Optional[SearchSpaceParamConfig] = None  # Channel multipliers per level
+    attention_resolutions: Optional[SearchSpaceParamConfig] = None  # Resolutions with attention
+    num_res_blocks: Optional[SearchSpaceParamConfig] = None  # Residual blocks per level
+    dropout: Optional[SearchSpaceParamConfig] = None  # Dropout rate
+    conditioning_strategy: Optional[SearchSpaceParamConfig] = None  # concat, film, adaptive_norm, cross_attention
+    param_embedding_dim: Optional[SearchSpaceParamConfig] = None  # Parameter embedding dimension
+    film_hidden_dim: Optional[SearchSpaceParamConfig] = None  # FiLM hidden dimension
+    conditioning_dropout: Optional[SearchSpaceParamConfig] = None  # CFG training dropout
+    cfg_scale: Optional[SearchSpaceParamConfig] = None  # Classifier-free guidance scale
+    loss_type: Optional[SearchSpaceParamConfig] = None  # mse, mae
+    grad_clip: Optional[SearchSpaceParamConfig] = None  # Gradient clipping
+    scheduler: Optional[SearchSpaceParamConfig] = None  # Learning rate scheduler
+
 
 class ObjectiveConfig(BaseModel):
     """Configuration for a single optimization objective."""
@@ -455,15 +474,18 @@ class ObjectiveConfig(BaseModel):
 
 
 class OptimizationConfig(BaseModel):
-    """Configuration for Optuna hyperparameter optimization."""
+    """Configuration for Optuna hyperparameter optimization.
+
+    Supports both VAE and DDPM model optimization.
+    """
     metadata: MetadataConfig
     data: DataConfig
-    model_type: Literal["vae", "unet_vae", "hvae"]
+    model_type: Literal["vae", "unet_vae", "hvae", "ddpm"]
 
     # Base config with fixed parameters
     base_training: TrainingConfig
     base_loss: LossConfig
-    base_model: Union[VAEModelConfig, HVAEModelConfig]
+    base_model: Union[VAEModelConfig, HVAEModelConfig, DDPMModelConfig]
     base_checkpointing: CheckpointingConfig
     base_logging: LoggingConfig
 
