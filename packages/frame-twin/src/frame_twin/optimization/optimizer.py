@@ -1,5 +1,6 @@
 """Optuna optimizer for VAE and DDPM hyperparameter search."""
 
+import gc
 import json
 import tempfile
 from pathlib import Path
@@ -7,6 +8,7 @@ from typing import Dict, Tuple, Optional
 import tomli_w
 import optuna
 import pandas as pd
+import torch
 
 from frame.management import ExperimentManager, CheckpointManager
 from frame_twin.config import (
@@ -325,6 +327,13 @@ class OptunaOptimizer:
                     worst_values.append(float('-inf'))
 
             return tuple(worst_values)
+        finally:
+            # Clean up CUDA resources after each trial to prevent accumulation
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+                torch.cuda.reset_peak_memory_stats()
 
     def _create_trial_config(self, trial: optuna.Trial, params: Dict) -> Path:
         """Create trial-specific config and save to TOML.
