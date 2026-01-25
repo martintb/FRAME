@@ -209,7 +209,7 @@ class DDPMConditioningConfig(BaseModel):
 class DDPMModelConfig(BaseModel):
     """DDPM model configuration."""
     type: Literal["ddpm"] = "ddpm"
-    conditioning_strategy: Literal["concat", "cross_attention", "adaptive_norm", "film"]
+    conditioning_strategy: Literal["none", "concat", "cross_attention", "adaptive_norm", "film"]
     vae_experiment_uuid: str  # VAE experiment UUID or path to checkpoint
     freeze_vae: bool = True
     

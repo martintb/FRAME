@@ -469,9 +469,9 @@ class OptunaOptimizer:
         if 'conditioning_strategy' in params:
             model_config_dict['conditioning_strategy'] = params['conditioning_strategy']
 
-        # Update conditioning config if it exists
+        # Update conditioning config if it exists and strategy is not "none"
         conditioning_config = model_config_dict.get('conditioning', {})
-        if isinstance(conditioning_config, dict):
+        if isinstance(conditioning_config, dict) and params.get('conditioning_strategy') != 'none':
             if 'param_embedding_dim' in params:
                 conditioning_config['param_embedding_dim'] = params['param_embedding_dim']
 

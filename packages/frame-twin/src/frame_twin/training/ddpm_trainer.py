@@ -175,6 +175,9 @@ class DDPMTrainer(BaseTrainer):
     
     def _create_conditioning_strategy(self, config: DDPMConfig):
         """Create conditioning strategy based on config."""
+        if config.model.conditioning_strategy == "none":
+            return None
+        
         conditioning_config = config.model.conditioning
         
         if config.model.conditioning_strategy == "concat":
@@ -271,8 +274,11 @@ class DDPMTrainer(BaseTrainer):
         
         return loss, metrics
     
-    def _encode_parameters_batch(self, parameters: list) -> torch.Tensor:
+    def _encode_parameters_batch(self, parameters: list) -> Optional[torch.Tensor]:
         """Encode a batch of parameter dictionaries."""
+        if self.conditioning_strategy is None:
+            return None
+        
         batch_conditioning = []
         
         for param_dict in parameters:
@@ -315,7 +321,7 @@ class DDPMTrainer(BaseTrainer):
         
         with torch.no_grad():
             # Encode conditioning
-            if conditioning is not None:
+            if conditioning is not None and self.conditioning_strategy is not None:
                 conditioning_tensor = self.conditioning_strategy.encode_parameters(
                     conditioning, self.device
                 )
@@ -529,7 +535,7 @@ class DDPMTrainer(BaseTrainer):
         
         # Encode conditioning from selected sample if available
         conditioning_tensor = None
-        if parameters is not None and len(parameters) > 0:
+        if parameters is not None and len(parameters) > 0 and self.conditioning_strategy is not None:
             conditioning_tensor = self.conditioning_strategy.encode_parameters(
                 parameters[sample_idx], self.device
             )  # Already shaped (B, dim); for single sample returns (1, dim)

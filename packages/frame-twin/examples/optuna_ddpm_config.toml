@@ -94,7 +94,7 @@ choices = [4, 8]  # Conservative: only 2 options
 # TIER 1: Conditioning strategy (architectural choice)
 [search_space.conditioning_strategy]
 type = "categorical"
-choices = ["concat", "film", "adaptive_norm"]  # Exclude cross_attention (slower)
+choices = ["none", "concat", "film", "adaptive_norm"]  # "none" = unconditional generation; exclude cross_attention (slower)
 
 # TIER 2: Beta schedule (quality impact)
 [search_space.beta_schedule]
