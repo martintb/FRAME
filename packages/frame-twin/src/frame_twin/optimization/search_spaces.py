@@ -41,7 +41,18 @@ def suggest_hyperparameters(
                 log=param_config.log
             )
         elif param_config.type == "categorical":
-            return trial.suggest_categorical(name, param_config.choices)
+            # Convert list choices to tuples (Optuna requires hashable types)
+            processed_choices = []
+            for c in param_config.choices:
+                if isinstance(c, list):
+                    processed_choices.append(tuple(c))
+                else:
+                    processed_choices.append(c)
+            result = trial.suggest_categorical(name, processed_choices)
+            # Convert tuple back to list if needed
+            if isinstance(result, tuple):
+                return list(result)
+            return result
         else:
             raise ValueError(f"Unknown param type: {param_config.type}")
 

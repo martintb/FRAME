@@ -15,7 +15,10 @@ test_ratio = 0.1
 [model]
 type = "ddpm"
 conditioning_strategy = "film"  # Using FiLM conditioning
-vae_checkpoint = "frame_data/experiments/vae_lnp_baseline/checkpoints/best.pt"
+vae_checkpoint = "frame_data/experiments/vae_lnp_baseline/checkpoints/best.pt"  # Direct path to checkpoint
+# Alternative: use experiment UUID (and optionally a specific trial)
+# vae_experiment_uuid = "exp_abc123"  # VAE experiment UUID
+# vae_trial_uuid = "trial_xyz789"  # Optional: specific trial within the VAE experiment
 freeze_vae = true
 
 # DDPM parameters

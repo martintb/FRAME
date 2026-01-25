@@ -434,21 +434,18 @@ class OptunaOptimizer:
 
         # Architecture parameters
         if 'unet_channels' in params:
-            # If unet_channel_multipliers is also specified, compute full channel list
-            if 'unet_channel_multipliers' in params:
-                unet_channels_list = compute_unet_channels(params)
-                model_config_dict['unet_channels'] = unet_channels_list
+            unet_channels = params['unet_channels']
+            if isinstance(unet_channels, list):
+                # Direct channel schedule provided (list of ints)
+                model_config_dict['unet_channels'] = unet_channels
             else:
-                # Just update the base channels, keep existing multipliers
-                base_channels = params['unet_channels']
-                existing_multipliers = model_config_dict.get('unet_channels', [32, 64, 128, 256])
-                # Infer multipliers from existing channel list
-                if existing_multipliers:
-                    old_base = existing_multipliers[0]
-                    multipliers = [c // old_base for c in existing_multipliers]
-                    model_config_dict['unet_channels'] = [base_channels * m for m in multipliers]
+                # Scalar base channel - compute with multipliers
+                if 'unet_channel_multipliers' in params:
+                    model_config_dict['unet_channels'] = compute_unet_channels(params)
                 else:
-                    model_config_dict['unet_channels'] = [base_channels, base_channels * 2, base_channels * 4, base_channels * 8]
+                    # Use default multipliers [1, 2, 4, 8]
+                    base = int(unet_channels)
+                    model_config_dict['unet_channels'] = [base, base*2, base*4, base*8]
 
         if 'timesteps' in params:
             model_config_dict['timesteps'] = params['timesteps']

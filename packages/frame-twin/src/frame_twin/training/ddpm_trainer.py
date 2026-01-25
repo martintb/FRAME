@@ -23,8 +23,11 @@ class DDPMTrainer(BaseTrainer):
     """Trainer for DDPM models."""
     
     def __init__(self, config: DDPMConfig, experiment=None):
-        # Resolve VAE checkpoint path (supports experiment UUID or direct path)
-        vae_checkpoint_path = self._resolve_checkpoint_path(config.model.vae_experiment_uuid)
+        # Resolve VAE checkpoint path (supports experiment UUID or direct path, optionally with trial UUID)
+        vae_checkpoint_path = self._resolve_checkpoint_path(
+            config.model.vae_experiment_uuid,
+            trial_uuid=config.model.vae_trial_uuid
+        )
         
         # Load VAE (supports both VAE and UNetVAE)
         vae_checkpoint = torch.load(vae_checkpoint_path, map_location='cpu')
@@ -661,16 +664,18 @@ class DDPMTrainer(BaseTrainer):
             torch.mps.empty_cache()
     
     @staticmethod
-    def _resolve_checkpoint_path(checkpoint_ref: str) -> Path:
+    def _resolve_checkpoint_path(checkpoint_ref: str, trial_uuid: Optional[str] = None) -> Path:
         """Resolve checkpoint reference to actual path.
         
         Supports:
         - Experiment UUID (e.g., 'exp_537908480581') -> resolves to best checkpoint
+        - Experiment UUID + trial UUID -> resolves to trial's best checkpoint
         - Checkpoint UUID (e.g., 'ckpt_abc123') -> resolves to checkpoint path
         - Direct file path -> returned as-is
         
         Args:
             checkpoint_ref: Experiment UUID, checkpoint UUID, or direct path
+            trial_uuid: Optional trial UUID (trial_*) within the experiment
             
         Returns:
             Path to checkpoint file
@@ -690,16 +695,23 @@ class DDPMTrainer(BaseTrainer):
         if checkpoint_ref.startswith('exp_'):
             config = get_config()
             exp_mgr = ExperimentManager()
-            experiment = exp_mgr.get_experiment(checkpoint_ref)
+            experiment = exp_mgr.get_experiment(checkpoint_ref, trial_uuid=trial_uuid)
             
             if experiment is None:
-                raise FileNotFoundError(
-                    f"Experiment '{checkpoint_ref}' not found in {config.experiments_path}"
-                )
+                if trial_uuid:
+                    raise FileNotFoundError(
+                        f"Trial '{trial_uuid}' not found in experiment '{checkpoint_ref}' "
+                        f"in {config.experiments_path}"
+                    )
+                else:
+                    raise FileNotFoundError(
+                        f"Experiment '{checkpoint_ref}' not found in {config.experiments_path}"
+                    )
             
             if experiment.best_checkpoint is None:
+                experiment_label = f"'{checkpoint_ref}'" + (f" (trial {trial_uuid})" if trial_uuid else "")
                 raise ValueError(
-                    f"Experiment '{checkpoint_ref}' has no best checkpoint set. "
+                    f"Experiment {experiment_label} has no best checkpoint set. "
                     f"Use 'frame checkpoint set-best' to mark one."
                 )
             
@@ -711,8 +723,9 @@ class DDPMTrainer(BaseTrainer):
             )
             
             if checkpoint is None:
+                experiment_label = f"'{checkpoint_ref}'" + (f" (trial {trial_uuid})" if trial_uuid else "")
                 raise FileNotFoundError(
-                    f"Best checkpoint '{experiment.best_checkpoint}' not found for experiment '{checkpoint_ref}'"
+                    f"Best checkpoint '{experiment.best_checkpoint}' not found for experiment {experiment_label}"
                 )
             
             return checkpoint.checkpoint_path

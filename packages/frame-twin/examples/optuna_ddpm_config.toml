@@ -35,6 +35,7 @@ model_type = "ddpm"
 # Fixed DDPM parameters
 type = "ddpm"
 vae_experiment_uuid = "exp_REPLACE_WITH_YOUR_VAE_UUID"  # REQUIRED: Pre-trained VAE
+# vae_trial_uuid = "trial_xyz789"  # Optional: specific trial within the VAE experiment (defaults to experiment's best checkpoint)
 freeze_vae = true
 # latent_channels will be inferred from VAE (typically 32)
 
@@ -94,7 +95,7 @@ choices = [4, 8]  # Conservative: only 2 options
 # TIER 1: Conditioning strategy (architectural choice)
 [search_space.conditioning_strategy]
 type = "categorical"
-choices = ["none", "concat", "film", "adaptive_norm"]  # "none" = unconditional generation; exclude cross_attention (slower)
+choices = ["none", "concat", "film", "adaptive_norm"]  # Exclude cross_attention (slower)
 
 # TIER 2: Beta schedule (quality impact)
 [search_space.beta_schedule]
@@ -135,9 +136,15 @@ weight = 0.5  # Lower priority than quality
 # ============================================================================
 # Uncomment these sections to expand the search space for more thorough exploration
 
+# Channel schedules: Use list of lists for direct channel configurations
 # [search_space.unet_channels]
 # type = "categorical"
-# choices = [32, 48, 64]
+# choices = [[32, 64, 128, 256], [48, 96, 192, 384], [64, 128, 256, 512]]
+#
+# OR use scalar base channels with default multipliers [1, 2, 4, 8]:
+# [search_space.unet_channels]
+# type = "categorical"
+# choices = [32, 48, 64]  # Results in [32,64,128,256], [48,96,192,384], [64,128,256,512]
 
 # [search_space.timesteps]
 # type = "categorical"

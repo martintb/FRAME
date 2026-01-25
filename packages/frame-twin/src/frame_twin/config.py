@@ -1,7 +1,7 @@
 """Configuration schemas for frame-twin models and training."""
 
 from pathlib import Path
-from typing import Dict, List, Optional, Union, Literal
+from typing import Dict, List, Optional, Union, Literal, Any
 import tomli
 
 from pydantic import BaseModel, Field, validator
@@ -211,6 +211,7 @@ class DDPMModelConfig(BaseModel):
     type: Literal["ddpm"] = "ddpm"
     conditioning_strategy: Literal["none", "concat", "cross_attention", "adaptive_norm", "film"]
     vae_experiment_uuid: str  # VAE experiment UUID or path to checkpoint
+    vae_trial_uuid: Optional[str] = None  # Optional trial UUID (trial_*) within the VAE experiment
     freeze_vae: bool = True
     
     # DDPM-specific parameters
@@ -424,7 +425,7 @@ class SearchSpaceParamConfig(BaseModel):
     max: Optional[float] = None
     step: Optional[float] = None
     log: bool = False
-    choices: Optional[List[Union[int, float, str]]] = None
+    choices: Optional[List[Any]] = None
 
 
 class SearchSpaceConfig(BaseModel):
@@ -531,18 +532,38 @@ class OptimizationConfig(BaseModel):
 
         base_model = data.setdefault('base_model', {})
         base_model.setdefault('type', data['model_type'])
-        base_model.setdefault('latent_channels', int(_default_from_search('latent_channels', 32)))
+        model_type = base_model.get('type', data['model_type'])
+        
+        # Handle DDPM-specific fields
+        if model_type == 'ddpm':
+            # Backfill conditioning_strategy from search space if missing
+            if 'conditioning_strategy' not in base_model:
+                base_model['conditioning_strategy'] = _default_from_search('conditioning_strategy', 'none')
+            
+            # Ensure conditioning config exists
+            if 'conditioning' not in base_model:
+                base_model['conditioning'] = {}
+            conditioning_config = base_model['conditioning']
+            
+            # Backfill conditioning config fields if missing
+            if 'param_embedding_dim' not in conditioning_config:
+                conditioning_config['param_embedding_dim'] = int(_default_from_search('param_embedding_dim', 128))
+            if 'film_hidden_dim' not in conditioning_config:
+                conditioning_config['film_hidden_dim'] = int(_default_from_search('film_hidden_dim', 256))
+        else:
+            # VAE/HVAE-specific fields
+            base_model.setdefault('latent_channels', int(_default_from_search('latent_channels', 32)))
 
-        has_schedule = any(base_model.get(key) is not None for key in ('channel_schedule', 'base_channels', 'levels'))
-        if not has_schedule:
-            base_channels = int(_default_from_search('base_channels', 32))
-            schedule_choice = _default_from_search('channel_schedule_type', 'medium')
-            if schedule_choice == 'shallow':
-                channel_schedule = [base_channels, base_channels * 2]
-            elif schedule_choice == 'deep':
-                channel_schedule = [base_channels, base_channels * 2, base_channels * 4, base_channels * 8]
-            else:
-                channel_schedule = [base_channels, base_channels * 2, base_channels * 4]
-            base_model['channel_schedule'] = channel_schedule
+            has_schedule = any(base_model.get(key) is not None for key in ('channel_schedule', 'base_channels', 'levels'))
+            if not has_schedule:
+                base_channels = int(_default_from_search('base_channels', 32))
+                schedule_choice = _default_from_search('channel_schedule_type', 'medium')
+                if schedule_choice == 'shallow':
+                    channel_schedule = [base_channels, base_channels * 2]
+                elif schedule_choice == 'deep':
+                    channel_schedule = [base_channels, base_channels * 2, base_channels * 4, base_channels * 8]
+                else:
+                    channel_schedule = [base_channels, base_channels * 2, base_channels * 4]
+                base_model['channel_schedule'] = channel_schedule
 
         return cls(**data)
