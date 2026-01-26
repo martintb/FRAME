@@ -2,6 +2,7 @@
 
 import gc
 import json
+import os
 import tempfile
 import traceback
 from pathlib import Path
@@ -45,6 +46,7 @@ class OptunaOptimizer:
         self.ckpt_mgr = CheckpointManager()
         self.parent_experiment = None
         self.study = None
+        self._cuda_available = None
 
     def run(self, resume: bool = False) -> optuna.Study:
         """Run the optimization study.
@@ -55,6 +57,11 @@ class OptunaOptimizer:
         Returns:
             Completed Optuna study
         """
+        if self.config.base_training.device == "cuda":
+            self._cuda_available = self._try_cuda_init()
+            if self._cuda_available is False and not self.config.optuna.cuda_fallback_to_cpu:
+                raise RuntimeError(self._build_cuda_init_error())
+
         if self.config.optuna.mp_start_method:
             import torch.multiprocessing as mp
             desired_method = self.config.optuna.mp_start_method
@@ -436,6 +443,9 @@ class OptunaOptimizer:
         if 'kl_warmup_epochs' in params:
             training_config_dict['kl_warmup_epochs'] = params['kl_warmup_epochs']
 
+        if self.config.optuna.cuda_fallback_to_cpu and self._cuda_available is False:
+            training_config_dict['device'] = "cpu"
+
         if 'optimizer' in params:
             training_config_dict['optimizer'] = params['optimizer']
 
@@ -539,6 +549,9 @@ class OptunaOptimizer:
 
         if 'batch_size' in params:
             training_config_dict['batch_size'] = params['batch_size']
+
+        if self.config.optuna.cuda_fallback_to_cpu and self._cuda_available is False:
+            training_config_dict['device'] = "cpu"
 
         if 'optimizer' in params:
             training_config_dict['optimizer'] = params['optimizer']
@@ -1162,3 +1175,40 @@ class OptunaOptimizer:
         if isinstance(obj, list):
             return [OptunaOptimizer._remove_nones(v) for v in obj if v is not None]
         return obj
+
+    @staticmethod
+    def _try_cuda_init() -> bool:
+        """Attempt CUDA init once and return availability."""
+        if torch.version.cuda is None:
+            print("Warning: CUDA build not detected.")
+            return False
+        try:
+            torch.cuda.init()
+            return True
+        except Exception as exc:
+            print(f"Warning: CUDA init failed: {exc}")
+            return False
+
+    @staticmethod
+    def _build_cuda_init_error() -> str:
+        """Build a fail-fast CUDA init error with diagnostics."""
+        env_keys = [
+            "CUDA_VISIBLE_DEVICES",
+            "SLURM_JOB_GPUS",
+            "SLURM_GPUS_ON_NODE",
+            "SLURM_STEP_GPUS",
+            "SLURM_LOCALID",
+            "NVIDIA_VISIBLE_DEVICES"
+        ]
+        env_info = ", ".join(f"{key}={os.environ.get(key, '')}" for key in env_keys)
+        return (
+            "CUDA initialization failed during Optuna startup.\n"
+            f"torch.version.cuda={torch.version.cuda}\n"
+            f"env: {env_info}\n"
+            "Suggestions:\n"
+            "- Verify the GPU is visible inside the job (e.g., nvidia-smi).\n"
+            "- Ensure CUDA_VISIBLE_DEVICES maps to the allocated GPU.\n"
+            "- If using SLURM, confirm gpu allocation matches CUDA_VISIBLE_DEVICES.\n"
+            "- Avoid any fork after CUDA init; use spawn if multiprocessing is required.\n"
+            "- Set training num_workers=0 to avoid worker process CUDA init."
+        )

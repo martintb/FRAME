@@ -15,6 +15,7 @@ n_startup_trials = 5
 n_warmup_steps = 5  # Shorter warmup for DDPM
 # cuda_safe_cleanup = true  # Skip device_count during cleanup if CUDA uninitialized
 # cuda_debug_device_count_trace = true  # Print stack trace on device_count calls
+# cuda_fallback_to_cpu = true  # Fallback to CPU if CUDA init fails
 # mp_start_method = "spawn"  # Optional: set multiprocessing start method
 # data_loader_mp_context = "spawn"  # Optional: DataLoader multiprocessing context
 

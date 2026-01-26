@@ -424,6 +424,7 @@ class OptunaConfig(BaseModel):
     n_warmup_steps: int = 10
     cuda_safe_cleanup: bool = False
     cuda_debug_device_count_trace: bool = False
+    cuda_fallback_to_cpu: bool = False
     mp_start_method: Optional[Literal["spawn", "fork", "forkserver"]] = None
     data_loader_mp_context: Optional[Literal["spawn", "fork", "forkserver"]] = None
 
