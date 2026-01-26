@@ -68,8 +68,16 @@ frame/
   - ✅ `VoxelGrid` data model with validation and metadata
   - ✅ `VoxelLibrary` for Zarr-based storage with lazy loading
   - ✅ `VoxelDataset` for PyTorch training integration
+  - ✅ `CachedVoxelDataset` for in-memory caching
   - ✅ Parameter-based filtering and batch loading
   - ✅ Efficient memory management with lazy loading
+  - ✅ Lazy imports (PEP 562) for fast CLI startup
+
+- **Data Transforms**:
+  - ✅ `RandomCrop3D` - Random cropping for data augmentation
+  - ✅ `RandomRotation3D` - 90-degree rotations around axes
+  - ✅ `CenterCrop3D` - Center cropping
+  - ✅ `Compose` - Transform composition
 
 - **Visualization**:
   - ✅ Three visualization backends:
@@ -83,7 +91,9 @@ frame/
   - ✅ Experiment management: `list`, `show`, `tag`, `untag`, `stop`
   - ✅ Checkpoint management: `list`, `show`, `set-best`
   - ✅ Visualization: `view` - Interactive napari visualization
-  - ✅ TensorBoard launcher
+  - ✅ TensorBoard launcher for experiment monitoring
+  - ✅ Optuna Dashboard launcher for hyperparameter optimization studies
+  - ✅ Configuration initialization: `init` - Install default FRAME config
   - ✅ Migration tools for legacy data
   - ✅ Integrates frame-geo and frame-twin subcommands
 
@@ -121,37 +131,61 @@ frame/
   - ✅ CLI: `frame-geo generate`, `validate-config`, `list-types`
   - ✅ Rejection sampling with detailed tracking
   - ✅ Parallel processing with multiprocessing (3-8x speedup)
-  - ✅ 25 passing tests with full coverage
+  - ✅ 6 test files with coverage for core functionality
   - ✅ Extensible architecture for new structure types
 
 ### `frame-twin` ✅ IMPLEMENTED
 **Purpose**: Diffusion-based digital twin for 3D voxel structure generation
 
 - **Two-Stage Architecture**: VAE compression + DDPM generation in latent space
-- **VAE Model**: 3D convolutional encoder/decoder with configurable compression ratio
-  - Input: (B, 9, 128, 128, 128) → Latent: (B, 32, 16, 16, 16)
+- **VAE Models**: Multiple architectures available
+  - **VAE**: Standard 3D convolutional encoder/decoder with configurable compression
+  - **UNetVAE**: U-Net style architecture with skip connections
+  - **HVAE**: Hierarchical VAE with multiple resolution levels
+  - **VP-HVAE**: Variance-preserving hierarchical VAE
+  - Input: (B, 9, 128, 128, 128) → Latent: (B, 32, 16, 16, 16) [configurable]
   - Reconstruction + KL divergence loss
+  - Gated convolutional layers for improved expressiveness
   - Separate training pipeline with comprehensive checkpointing
 - **DDPM Model**: 3D U-Net operating in latent space with parameter conditioning
-  - Three conditioning strategies: concatenation, cross-attention, adaptive normalization
+  - Five conditioning strategies: concatenation, cross-attention, adaptive normalization, FiLM, base
   - Configurable noise schedules (linear/cosine)
   - Support for classifier-free guidance
+  - Consistent interface with out_channels attribute
 - **Training Infrastructure**:
+  - Unified trainer (auto-detects VAE/DDPM from config)
   - Base trainer with shared functionality (DDP, logging, checkpointing)
   - VAE trainer with reconstruction metrics
   - DDPM trainer with conditioning integration
   - Time-based and epoch-based checkpointing
   - TensorBoard logging and metric tracking
+  - Experiment continuation with lineage tracking
+- **Hyperparameter Optimization**:
+  - ✅ Optuna integration for automated hyperparameter search
+  - ✅ Multi-objective optimization support
+  - ✅ Configurable search spaces for model architectures and training parameters
+  - ✅ Pruning callbacks for early trial termination
+  - ✅ Trial tracking and experiment management integration
+  - ✅ CUDA resource cleanup for stable optimization runs
+  - ✅ Optuna Dashboard integration via CLI
 - **Data Handling**:
   - Integration with `frame.VoxelLibrary` (formerly frame-voxel)
   - Random and stratified data splitting
   - Custom collate functions for (voxels, parameters) pairs
   - Distributed data loading for DDP
 - **Configuration System**: TOML-based configs with Pydantic validation
-- **CLI Interface**: Commands for training, inference, and evaluation
+- **CLI Interface**: Commands for training, inference, evaluation, and optimization
+  - `train` - Unified training command (auto-detects VAE/DDPM)
+  - `generate-config` - Generate template configuration files
+  - `generate` - Generate new structures from trained models
+  - `continue` - Continue training from existing experiment with modified config
+  - `validate-vae` - Side-by-side VAE reconstruction validation
+  - `sample-prior` - Sample from trained VAE latent prior
+  - `perturb-structure` - Encode and decode with latent perturbations
+  - `optimize` - Run Optuna hyperparameter optimization
 - **Python API**: High-level and low-level interfaces
 - **Inference Pipeline**: Parameter masking for partial conditioning
-- **Status**: Core implementation complete, ready for training
+- **Status**: Core implementation complete with advanced features
 
 ### Virtual Instruments 🚧 NOT YET IMPLEMENTED
 - Planned: SAXS, SANS, and cryo-EM forward models
@@ -263,11 +297,30 @@ uv run python scripts/train.py
 uv run frame library list
 uv run frame library show <uuid>
 uv run frame library search --tag production
+uv run frame library tag <uuid> <tag>
+uv run frame library untag <uuid> <tag>
 
 # Experiment management
 uv run frame experiment list --model-type vae
 uv run frame experiment show <uuid>
+uv run frame experiment tag <uuid> <tag>
+uv run frame experiment untag <uuid> <tag>
+uv run frame experiment stop <uuid>
+
+# Checkpoint management
+uv run frame checkpoint list <experiment_uuid>
+uv run frame checkpoint show <experiment_uuid> <checkpoint_name>
+uv run frame checkpoint set-best <experiment_uuid> <checkpoint_name>
+
+# Monitoring and dashboards
 uv run frame tensorboard <experiment_uuid>
+uv run frame optuna-dashboard <experiment_uuid>
+
+# Configuration
+uv run frame init  # Install default FRAME config to ~/.frame.toml
+
+# Visualization
+uv run frame view <library_uuid>
 
 # Migration
 uv run frame migrate output/lnp_5k_10ch --tags production,lnp,10ch
@@ -275,18 +328,24 @@ uv run frame migrate output/lnp_5k_10ch --tags production,lnp,10ch
 # Geometry generation (frame-geo integration)
 uv run frame geo generate config.toml
 uv run frame geo list-types
+uv run frame geo validate-config config.toml
 
-# Twin training (frame-twin integration)
-uv run frame twin train-vae config.toml
-uv run frame twin train-ddpm config.toml
-uv run frame twin generate config.toml
+# Twin training and generation (frame-twin integration)
+uv run frame twin train config.toml  # Auto-detects VAE/DDPM from config
+uv run frame twin generate-config  # Generate template config
+uv run frame twin generate config.toml  # Generate structures
+uv run frame twin continue <exp_uuid> --config modified.toml  # Continue with new config
+uv run frame twin validate-vae <exp_uuid>  # Validate VAE reconstruction
+uv run frame twin sample-prior <exp_uuid>  # Sample from VAE latent prior
+uv run frame twin perturb-structure <exp_uuid> <voxel_path>  # Encode/decode with perturbations
+uv run frame twin optimize optuna_config.toml  # Run hyperparameter optimization
 ```
 
 **Legacy CLIs** (still available):
 ```bash
 # Individual package CLIs still work
 uv run frame-geo generate config.toml
-uv run frame-twin train-vae config.toml
+uv run frame-twin train config.toml
 ```
 
 **Testing**:
@@ -343,7 +402,7 @@ uv run mypy packages/
 - **Solution**:
   - `frame-core` has **no dependencies** on `frame-geo` or `frame-twin` ✅
   - `frame-geo` uses PyTorch tensors compatible with `frame-core` VoxelGrid ✅
-  - `frame-twin` will depend on `frame-core` for data models (when implemented)
+  - `frame-twin` depends on `frame-core` for data models and experiment management ✅
   - Keep interfaces clean and minimal ✅
 
 **Current Dependency Graph**:
@@ -354,9 +413,9 @@ frame-core (standalone)
     │
 frame-geo (PyTorch, PyMC, Zarr, PyVista)
     ↑
-    │ (will consume voxel libraries)
+    │ (consumes voxel libraries)
     │
-frame-twin (not yet implemented)
+frame-twin (PyTorch, Optuna, depends on frame-core) ✅
 ```
 
 ---
@@ -420,17 +479,27 @@ frame-twin (not yet implemented)
 - `tqdm>=4.65` - progress bars
 - `pytest>=8.4` - testing
 
-**Future** (for frame-twin and virtual instruments):
-- `diffusers` - diffusion model components
+**frame-twin**:
+- `torch>=2.0` - PyTorch tensors and neural networks
+- `frame-core` - workspace dependency for data models and experiment management
+- `numpy>=1.24` - numerical operations
+- `tomli>=2.0` - TOML parsing
+- `pydantic>=2.0` - configuration validation
+- `tensorboard>=2.12` - training visualization
+- `tqdm>=4.65` - progress bars
+- `scikit-learn>=1.3` - stratified data splitting
+- `optuna>=3.1.0` - hyperparameter optimization
+
+**Future** (for virtual instruments):
 - `scipy` - scattering calculations
 - Domain-specific libraries (SAXS/SANS/cryo-EM)
 
 ### Typical Workflow
 
-**Currently Implemented (Steps 1-2)**:
-1. ✅ **Generate cartoons**: 
+**Currently Implemented (Steps 1-4)**:
+1. ✅ **Generate cartoons**:
    ```bash
-   uv run frame-geo generate config.toml
+   uv run frame geo generate config.toml
    ```
    - Samples from PyMC priors
    - Constructs parametric LNP structures
@@ -440,14 +509,36 @@ frame-twin (not yet implemented)
 
 2. ✅ **Load and visualize**:
    ```python
-   from frame_core.storage import VoxelLibrary
+   from frame import VoxelLibrary
    lib = VoxelLibrary("output/lnp_example/voxels.zarr")
    grid = lib[0]  # Load first structure
    ```
 
+3. ✅ **Train digital twin**:
+   ```bash
+   # Train VAE for compression
+   uv run frame twin train vae_config.toml
+
+   # Train DDPM in latent space
+   uv run frame twin train ddpm_config.toml
+
+   # Or optimize hyperparameters
+   uv run frame twin optimize optuna_config.toml
+   ```
+
+4. ✅ **Generate new structures**:
+   ```bash
+   # Generate ensemble from trained model
+   uv run frame twin generate generation_config.toml
+
+   # Validate VAE reconstruction
+   uv run frame twin validate-vae <exp_uuid>
+
+   # Sample from latent prior
+   uv run frame twin sample-prior <exp_uuid>
+   ```
+
 **Future Steps (Not Yet Implemented)**:
-3. 🚧 **Train twin**: `frame-twin` learns distribution from voxelized cartoons
-4. 🚧 **Generate ensemble**: Sample from trained diffusion model
 5. 🚧 **Compute virtual data**: Virtual instruments compute SAXS/SANS/cryo-EM
 6. 🚧 **Refine**: Adjust ensemble to match experimental data
 
@@ -461,9 +552,7 @@ frame-twin (not yet implemented)
 
 #### frame-core: Data Models & I/O
 ```python
-from frame_core.voxel_grid import VoxelGrid
-from frame_core.storage import VoxelLibrary
-from frame_core.dataset import VoxelDataset
+from frame import VoxelGrid, VoxelLibrary, VoxelDataset
 import torch
 
 # Create a voxel grid
@@ -605,18 +694,51 @@ uv run pytest
 # Run package-specific tests
 uv run pytest packages/frame-core/tests/ -v
 uv run pytest packages/frame-geo/tests/ -v
+uv run pytest packages/frame-twin/tests/ -v
 
 # With coverage
-uv run pytest --cov=frame_core --cov=frame_geo --cov-report=html
+uv run pytest --cov=frame --cov=frame_geo --cov=frame_twin --cov-report=html
 ```
 
-### What's Next: frame-twin
+### frame-twin Usage
 
-The next package to implement will be `frame-twin`, which will:
-1. Load voxel libraries generated by `frame-geo`
-2. Train a latent diffusion model (VAE + DDPM)
-3. Generate new structures conditioned on experimental data
-4. Interface with virtual instruments for refinement
+`frame-twin` is now fully implemented and provides the digital twin functionality:
+
+```bash
+# Train a VAE model
+uv run frame twin train vae_config.toml
+
+# Train a DDPM model (requires trained VAE)
+uv run frame twin train ddpm_config.toml
+
+# Generate new structures
+uv run frame twin generate generation_config.toml
+
+# Run hyperparameter optimization
+uv run frame twin optimize optuna_config.toml
+
+# Validate VAE reconstruction
+uv run frame twin validate-vae <experiment_uuid>
+
+# Launch Optuna dashboard
+uv run frame optuna-dashboard <experiment_uuid>
+```
+
+Python API example:
+```python
+from frame_twin.config import VAEConfig, DDPMConfig
+from frame_twin.training import VAETrainer, DDPMTrainer
+
+# Train VAE
+vae_config = VAEConfig.from_toml("vae_config.toml")
+vae_trainer = VAETrainer(vae_config)
+vae_trainer.train()
+
+# Train DDPM
+ddpm_config = DDPMConfig.from_toml("ddpm_config.toml")
+ddpm_trainer = DDPMTrainer(ddpm_config)
+ddpm_trainer.train()
+```
 
 ---
 
@@ -635,41 +757,48 @@ The next package to implement will be `frame-twin`, which will:
 
 | Package | Status | Lines of Code | Tests | Key Features |
 |---------|--------|---------------|-------|--------------|
-| **frame-core** | ✅ Complete | ~3500 | 0 | VoxelGrid, VoxelLibrary, LibraryManager, ExperimentManager, unified CLI, migration |
-| **frame-geo** | ✅ Complete | ~2000 | 25 | LNP generator, PyMC priors, 7 validators, hybrid voxelization, CLI integration |
-| **frame-twin** | ✅ Complete | ~1500 | 3 | VAE+DDPM models, 3 conditioning strategies, training infrastructure, CLI integration |
+| **frame-core** | ✅ Complete | ~3500 | 1 | VoxelGrid, VoxelLibrary, LibraryManager, ExperimentManager, transforms, unified CLI, migration, lazy imports |
+| **frame-geo** | ✅ Complete | ~2000 | 6 | LNP generator, PyMC priors, 7 validators, hybrid voxelization, parallel generation, CLI integration |
+| **frame-twin** | ✅ Complete | ~2500 | 4 | Multiple VAE architectures (VAE/UNet/HVAE/VP-HVAE), DDPM, 5 conditioning strategies, Optuna optimization, training infrastructure, CLI integration |
 | **Virtual Instruments** | 🚧 Pending | 0 | 0 | Awaiting implementation |
 
 **Current Capabilities**:
 - ✅ **Data Management**: UUID-based library and experiment tracking
-- ✅ **Unified CLI**: Central `frame` command integrating all packages
+- ✅ **Unified CLI**: Central `frame` command integrating all packages with lazy loading
 - ✅ **Library Management**: Create, list, search, and tag data libraries
-- ✅ **Experiment Tracking**: Track training experiments, checkpoints, and dependencies
+- ✅ **Experiment Tracking**: Track training experiments, checkpoints, and dependencies with lineage
 - ✅ **Migration Tools**: Automatic migration of legacy data with validation
+- ✅ **Data Transforms**: Random/center cropping and rotation for augmentation
 - ✅ **Generate synthetic LNP structures** from statistical priors
 - ✅ **Validate physical constraints** with 7 validators
 - ✅ **Voxelize** to multi-channel 3D grids (volume fractions)
 - ✅ **Store efficiently** in Zarr format with UUID tracking
 - ✅ **Visualize structures** (napari, PyVista)
-- ✅ **PyTorch dataset integration** for training
-- ✅ **Train VAE models** for voxel compression
-- ✅ **Train DDPM models** with parameter conditioning
+- ✅ **PyTorch dataset integration** for training with caching support
+- ✅ **Train VAE models** with multiple architectures (VAE/UNet/HVAE/VP-HVAE)
+- ✅ **Train DDPM models** with 5 conditioning strategies
+- ✅ **Hyperparameter optimization** with Optuna and multi-objective support
 - ✅ **Generate new structures** with partial parameter specification
+- ✅ **VAE reconstruction validation** with side-by-side visualization
+- ✅ **Latent space exploration** via sampling and perturbation
 - ✅ **TensorBoard integration** for monitoring training
+- ✅ **Optuna Dashboard integration** for optimization monitoring
 
 **Next Steps**:
 - 🚧 Add virtual instrument packages (SAXS, SANS, cryo-EM)
 - 🚧 Implement refinement algorithms
-- 🚧 Add comprehensive test coverage for frame-core and frame-twin
+- 🚧 Expand test coverage for frame-core (currently 1 test file)
+- 🚧 Expand test coverage for frame-twin (currently 4 test files)
+- 🚧 Add test coverage for frame-geo beyond existing 6 test files
 - 🚧 Complete migration of lnp_5k_10ch data
 
 ---
 
-**Last Updated**: 2025-10-13  
-**Workspace Manager**: `uv`  
-**Primary Framework**: PyTorch  
-**Primary CLI**: `uv run frame` (unified command)  
-**Initial Target**: Lipid nanoparticles × (SAXS, SANS, cryo-EM)  
-**Implementation Progress**: 3/4 core packages complete (75%)  
+**Last Updated**: 2026-01-26
+**Workspace Manager**: `uv`
+**Primary Framework**: PyTorch
+**Primary CLI**: `uv run frame` (unified command)
+**Initial Target**: Lipid nanoparticles × (SAXS, SANS, cryo-EM)
+**Implementation Progress**: 3/4 core packages complete (75%)
 **Note**: `frame-voxel` has been replaced by `frame-core` with expanded functionality
 
