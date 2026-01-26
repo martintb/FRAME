@@ -1,11 +1,14 @@
 """Checkpoint management."""
 
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
 from .utils import generate_uuid, timestamp_iso, write_protect
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -180,7 +183,8 @@ class CheckpointManager:
             try:
                 checkpoint = Checkpoint.from_metadata(metadata_path)
                 checkpoints.append(checkpoint)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to load checkpoint from {metadata_path}: {e}")
                 continue
         
         # If no new format checkpoints found, look for old format: direct .pt files
@@ -196,7 +200,8 @@ class CheckpointManager:
                     )
                     if checkpoint:
                         checkpoints.append(checkpoint)
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to create checkpoint from old format file {ckpt_file}: {e}")
                     continue
         
         # Sort by step

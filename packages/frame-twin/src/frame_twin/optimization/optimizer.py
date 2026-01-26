@@ -4,7 +4,7 @@ import gc
 import json
 import tempfile
 from pathlib import Path
-from typing import Dict, Tuple, Optional
+from typing import Any, Dict, Tuple, Optional
 import tomli_w
 import optuna
 import pandas as pd
@@ -587,6 +587,30 @@ class OptunaOptimizer:
         # Run training directly (without creating top-level experiment)
         try:
             self._train_trial(config_path, trial_exp, pruning_callback)
+
+            # Validate that checkpoints were created after training
+            # This catches cases where num_epochs < save_every_epochs
+            checkpoints = self.ckpt_mgr.list_checkpoints(trial_dir)
+            if not checkpoints:
+                # Try to provide helpful debugging info
+                ckpt_dir = trial_dir / "checkpoints"
+                ckpt_contents = self._get_checkpoint_dir_contents(ckpt_dir)
+                raise RuntimeError(
+                    f"Training completed but no checkpoints were created for trial {trial_uuid}.\n"
+                    f"Checkpoint directory: {ckpt_dir}\n"
+                    f"Directory contents: {ckpt_contents}\n"
+                    f"This usually happens when num_epochs < save_every_epochs in training config.\n"
+                    f"Ensure checkpointing.save_every_epochs <= training.num_epochs."
+                )
+
+            # Sync checkpoint UUIDs from disk to trial manifest
+            trial_manifest["checkpoints"] = [ckpt.uuid for ckpt in checkpoints]
+
+            # If best_checkpoint wasn't set by trainer, use the last checkpoint
+            if not trial_exp.best_checkpoint:
+                trial_exp.best_checkpoint = checkpoints[-1].uuid
+                trial_manifest["best_checkpoint"] = checkpoints[-1].uuid
+
             trial_manifest["status"] = "completed"
         except Exception as e:
             trial_manifest["status"] = "failed"
@@ -605,18 +629,32 @@ class OptunaOptimizer:
 
         Returns:
             Dict of metric name -> value
+
+        Raises:
+            ValueError: If no valid checkpoint with metrics can be found
         """
         ckpt = None
+
+        # Track debug info for error messages
+        debug_info = {
+            "experiment_uuid": experiment.uuid,
+            "experiment_path": str(experiment.path),
+            "best_checkpoint_attr": experiment.best_checkpoint,
+            "checkpoints_attr": getattr(experiment, "checkpoints", None),
+        }
 
         # Get best checkpoint from trial subdirectory if available
         if experiment.best_checkpoint:
             ckpt = self.ckpt_mgr.get_checkpoint(experiment.path, experiment.best_checkpoint)
+            debug_info["best_checkpoint_lookup_result"] = ckpt.uuid if ckpt else None
 
             # If the best checkpoint is missing, fall back to latest checkpoint
             if ckpt is None:
                 checkpoints = self.ckpt_mgr.list_checkpoints(experiment.path)
+                debug_info["fallback_checkpoint_count"] = len(checkpoints)
                 if checkpoints:
                     ckpt = checkpoints[-1]
+                    debug_info["fallback_checkpoint_uuid"] = ckpt.uuid
                     # Keep experiment metadata consistent for subsequent accesses
                     try:
                         experiment.best_checkpoint = ckpt.uuid
@@ -625,18 +663,77 @@ class OptunaOptimizer:
                     except Exception:
                         pass
                 else:
+                    # Provide detailed debug info in error
+                    ckpt_dir = experiment.path / "checkpoints"
+                    ckpt_contents = self._get_checkpoint_dir_contents(ckpt_dir)
+                    debug_info["checkpoint_dir_contents"] = ckpt_contents
                     raise ValueError(
                         f"Best checkpoint '{experiment.best_checkpoint}' not found and no checkpoints "
-                        f"exist for trial {experiment.uuid} in {experiment.path}"
+                        f"exist for trial {experiment.uuid} in {experiment.path}\n"
+                        f"Debug info: {json.dumps(debug_info, indent=2, default=str)}"
                     )
         else:
             # Fallback to last checkpoint
             checkpoints = self.ckpt_mgr.list_checkpoints(experiment.path)
+            debug_info["fallback_checkpoint_count"] = len(checkpoints)
             if not checkpoints:
-                raise ValueError(f"No checkpoints found for trial {experiment.uuid} in {experiment.path}")
+                ckpt_dir = experiment.path / "checkpoints"
+                ckpt_contents = self._get_checkpoint_dir_contents(ckpt_dir)
+                debug_info["checkpoint_dir_contents"] = ckpt_contents
+                raise ValueError(
+                    f"No checkpoints found for trial {experiment.uuid} in {experiment.path}\n"
+                    f"Debug info: {json.dumps(debug_info, indent=2, default=str)}"
+                )
             ckpt = checkpoints[-1]
+            debug_info["selected_checkpoint_uuid"] = ckpt.uuid
+
+        # Final defensive null check before accessing metrics
+        if ckpt is None:
+            ckpt_dir = experiment.path / "checkpoints"
+            ckpt_contents = self._get_checkpoint_dir_contents(ckpt_dir)
+            debug_info["checkpoint_dir_contents"] = ckpt_contents
+            raise ValueError(
+                f"Failed to obtain checkpoint for trial {experiment.uuid}.\n"
+                f"This is unexpected - checkpoint should have been set by this point.\n"
+                f"Debug info: {json.dumps(debug_info, indent=2, default=str)}"
+            )
 
         return ckpt.metrics or {}
+
+    def _get_checkpoint_dir_contents(self, ckpt_dir: Path) -> Dict[str, Any]:
+        """Get contents of checkpoint directory for debugging.
+
+        Args:
+            ckpt_dir: Path to checkpoints directory
+
+        Returns:
+            Dict with directory contents info
+        """
+        contents = {
+            "exists": ckpt_dir.exists(),
+            "is_dir": ckpt_dir.is_dir() if ckpt_dir.exists() else False,
+            "items": []
+        }
+
+        if ckpt_dir.exists() and ckpt_dir.is_dir():
+            try:
+                for item in ckpt_dir.iterdir():
+                    item_info = {
+                        "name": item.name,
+                        "is_dir": item.is_dir(),
+                        "size": item.stat().st_size if item.is_file() else None
+                    }
+                    if item.is_dir():
+                        # Check for metadata.json in checkpoint subdirs
+                        metadata_path = item / "metadata.json"
+                        item_info["has_metadata"] = metadata_path.exists()
+                        pt_files = list(item.glob("*.pt"))
+                        item_info["pt_files"] = [f.name for f in pt_files]
+                    contents["items"].append(item_info)
+            except Exception as e:
+                contents["error"] = str(e)
+
+        return contents
 
     def _validate_objectives_after_first_trial(self, metrics: Dict[str, float], trial: optuna.Trial):
         """Validate that all objective metrics are present after first trial.
@@ -836,10 +933,19 @@ class OptunaOptimizer:
             checkpoints=manifest.get("checkpoints", []),
             best_checkpoint=manifest.get("best_checkpoint"),
             _manifest=manifest,
-            _update_manifest=lambda: self._update_trial_manifest(trial_dir, manifest),
             add_tag=lambda tag: None,  # No-op for trials
             update_status=lambda status: None  # No-op for trials
         )
+
+        # Create a proper sync method that copies trial_exp attributes back to manifest
+        # This fixes the lambda closure issue where manifest wasn't updated with checkpoint changes
+        def _update_manifest_sync():
+            """Sync trial_exp attributes to manifest and write to disk."""
+            manifest["checkpoints"] = list(trial_exp.checkpoints) if trial_exp.checkpoints else []
+            manifest["best_checkpoint"] = trial_exp.best_checkpoint
+            self._update_trial_manifest(trial_dir, manifest)
+
+        trial_exp._update_manifest = _update_manifest_sync
         return trial_exp
 
     def _update_trial_manifest(self, trial_dir: Path, manifest: Dict):
