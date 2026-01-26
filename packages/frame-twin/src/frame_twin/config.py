@@ -422,6 +422,10 @@ class OptunaConfig(BaseModel):
     pruner: Optional[Literal["median", "hyperband", "none"]] = "median"
     n_startup_trials: int = 5
     n_warmup_steps: int = 10
+    cuda_safe_cleanup: bool = False
+    cuda_debug_device_count_trace: bool = False
+    mp_start_method: Optional[Literal["spawn", "fork", "forkserver"]] = None
+    data_loader_mp_context: Optional[Literal["spawn", "fork", "forkserver"]] = None
 
 
 class SearchSpaceParamConfig(BaseModel):

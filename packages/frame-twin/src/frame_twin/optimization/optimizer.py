@@ -3,6 +3,7 @@
 import gc
 import json
 import tempfile
+import traceback
 from pathlib import Path
 from typing import Any, Dict, Tuple, Optional
 import tomli_w
@@ -54,6 +55,34 @@ class OptunaOptimizer:
         Returns:
             Completed Optuna study
         """
+        if self.config.optuna.mp_start_method:
+            import torch.multiprocessing as mp
+            desired_method = self.config.optuna.mp_start_method
+            try:
+                current_method = mp.get_start_method(allow_none=True)
+                if current_method is None:
+                    mp.set_start_method(desired_method, force=True)
+                elif current_method != desired_method:
+                    print(
+                        f"Warning: multiprocessing start method already set to "
+                        f"{current_method}; requested {desired_method} ignored."
+                    )
+            except RuntimeError as exc:
+                print(f"Warning: unable to set multiprocessing start method: {exc}")
+
+        if self.config.optuna.cuda_debug_device_count_trace:
+            if not getattr(torch.cuda, "_frame_device_count_wrapped", False):
+                original_device_count = torch.cuda.device_count
+
+                def device_count_with_trace():
+                    print("\n[TRACE] torch.cuda.device_count() called from:")
+                    traceback.print_stack(limit=25)
+                    return original_device_count()
+
+                torch.cuda._frame_device_count_original = original_device_count
+                torch.cuda.device_count = device_count_with_trace
+                torch.cuda._frame_device_count_wrapped = True
+
         # Create parent optimization experiment
         self.parent_experiment = self._create_parent_experiment()
 
@@ -331,10 +360,16 @@ class OptunaOptimizer:
             # Clean up CUDA resources after each trial to prevent accumulation
             gc.collect()
             try:
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-                    torch.cuda.synchronize()
-                    torch.cuda.reset_peak_memory_stats()
+                if self.config.optuna.cuda_safe_cleanup:
+                    if torch.version.cuda is not None and torch.cuda.is_initialized():
+                        torch.cuda.empty_cache()
+                        torch.cuda.synchronize()
+                        torch.cuda.reset_peak_memory_stats()
+                else:
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                        torch.cuda.synchronize()
+                        torch.cuda.reset_peak_memory_stats()
             except Exception as exc:
                 print(f"Warning: CUDA cleanup failed: {exc}")
 
@@ -1020,7 +1055,8 @@ class OptunaOptimizer:
             reject_bg_only_crops=reject_bg,
             bg_channel_index=bg_channel_index,
             max_bg_crop_attempts=max_bg_attempts,
-            bg_only_tolerance=bg_tol
+            bg_only_tolerance=bg_tol,
+            multiprocessing_context=self.config.optuna.data_loader_mp_context
         )
         train_loader = loaders['train']
         val_loader = loaders['val']
@@ -1076,7 +1112,8 @@ class OptunaOptimizer:
             reject_bg_only_crops=reject_bg,
             bg_channel_index=bg_channel_index,
             max_bg_crop_attempts=max_bg_attempts,
-            bg_only_tolerance=bg_tol
+            bg_only_tolerance=bg_tol,
+            multiprocessing_context=self.config.optuna.data_loader_mp_context
         )
         train_loader = loaders['train']
         val_loader = loaders['val']

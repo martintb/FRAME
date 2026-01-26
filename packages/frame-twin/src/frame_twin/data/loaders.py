@@ -87,7 +87,8 @@ def create_data_loaders(
     reject_bg_only_crops: bool = False,
     bg_channel_index: Optional[int] = None,
     max_bg_crop_attempts: int = 8,
-    bg_only_tolerance: float = 1e-6
+    bg_only_tolerance: float = 1e-6,
+    multiprocessing_context: Optional[str] = None
 ) -> Dict[str, DataLoader]:
     """
     Create DataLoaders for train/val/test splits.
@@ -154,6 +155,7 @@ def create_data_loaders(
     )
     
     # Create DataLoaders
+    mp_context = multiprocessing_context if num_workers > 0 else None
     loaders['train'] = DataLoader(
         train_dataset,
         batch_size=batch_size,
@@ -161,6 +163,7 @@ def create_data_loaders(
         num_workers=num_workers,
         pin_memory=pin_memory,
         collate_fn=collate_voxel_batch,
+        multiprocessing_context=mp_context,
         drop_last=True  # Ensure consistent batch sizes
     )
     
@@ -171,6 +174,7 @@ def create_data_loaders(
         num_workers=num_workers,
         pin_memory=pin_memory,
         collate_fn=collate_voxel_batch,
+        multiprocessing_context=mp_context,
         drop_last=False
     )
     
@@ -181,6 +185,7 @@ def create_data_loaders(
         num_workers=num_workers,
         pin_memory=pin_memory,
         collate_fn=collate_voxel_batch,
+        multiprocessing_context=mp_context,
         drop_last=False
     )
     

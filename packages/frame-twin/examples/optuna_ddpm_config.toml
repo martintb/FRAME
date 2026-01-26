@@ -13,6 +13,10 @@ sampler = "tpe"  # Tree-structured Parzen Estimator (efficient)
 pruner = "median"  # Aggressive pruning for trial budget
 n_startup_trials = 5
 n_warmup_steps = 5  # Shorter warmup for DDPM
+# cuda_safe_cleanup = true  # Skip device_count during cleanup if CUDA uninitialized
+# cuda_debug_device_count_trace = true  # Print stack trace on device_count calls
+# mp_start_method = "spawn"  # Optional: set multiprocessing start method
+# data_loader_mp_context = "spawn"  # Optional: DataLoader multiprocessing context
 
 [data]
 # Update these to match your dataset
