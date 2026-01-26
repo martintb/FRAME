@@ -380,6 +380,8 @@ class DDPM(nn.Module):
         super().__init__()
         
         self.latent_channels = latent_channels
+        # Keep a consistent interface with other models/trainers that expect out_channels.
+        self.out_channels = latent_channels
         self.timesteps = timesteps
         self.conditioning_strategy = conditioning_strategy
         
