@@ -606,17 +606,37 @@ class OptunaOptimizer:
         Returns:
             Dict of metric name -> value
         """
-        # Get best checkpoint from trial subdirectory
+        ckpt = None
+
+        # Get best checkpoint from trial subdirectory if available
         if experiment.best_checkpoint:
             ckpt = self.ckpt_mgr.get_checkpoint(experiment.path, experiment.best_checkpoint)
+
+            # If the best checkpoint is missing, fall back to latest checkpoint
+            if ckpt is None:
+                checkpoints = self.ckpt_mgr.list_checkpoints(experiment.path)
+                if checkpoints:
+                    ckpt = checkpoints[-1]
+                    # Keep experiment metadata consistent for subsequent accesses
+                    try:
+                        experiment.best_checkpoint = ckpt.uuid
+                        if hasattr(experiment, "_update_manifest"):
+                            experiment._update_manifest()
+                    except Exception:
+                        pass
+                else:
+                    raise ValueError(
+                        f"Best checkpoint '{experiment.best_checkpoint}' not found and no checkpoints "
+                        f"exist for trial {experiment.uuid} in {experiment.path}"
+                    )
         else:
             # Fallback to last checkpoint
             checkpoints = self.ckpt_mgr.list_checkpoints(experiment.path)
             if not checkpoints:
-                raise ValueError(f"No checkpoints found for trial {experiment.uuid}")
+                raise ValueError(f"No checkpoints found for trial {experiment.uuid} in {experiment.path}")
             ckpt = checkpoints[-1]
 
-        return ckpt.metrics
+        return ckpt.metrics or {}
 
     def _validate_objectives_after_first_trial(self, metrics: Dict[str, float], trial: optuna.Trial):
         """Validate that all objective metrics are present after first trial.
