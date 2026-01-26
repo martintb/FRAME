@@ -346,6 +346,9 @@ class OptunaOptimizer:
             trial.set_user_attr('error', str(e))
             trial.set_user_attr('status', 'failed')
             print(f"\nTrial {trial.number} failed: {e}")
+            if "cudaGetDeviceCount" in str(e) or "system not yet initialized" in str(e):
+                print("CUDA init failed. Printing stack trace for diagnosis:")
+                traceback.print_exc()
 
             # Return worst possible values
             worst_values = []
