@@ -8,6 +8,11 @@ frame-twin = { workspace = true }
 
 [tool.uv]
 dev-dependencies = [
-    "pytest>=8.0.0",
-    "pytest-cov>=4.1.0",
+    "pytest",
+    "pytest-cov",
 ]
+
+# [[tool.uv.index]]
+# name = "pytorch-cu124"
+# url = "https://download.pytorch.org/whl/cu124"
+# explicit = true

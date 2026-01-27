@@ -5,17 +5,18 @@ description = "Stochastic geometry generator for FRAME digital twins"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "numpy>=1.24.0",
-    "torch>=2.0.0",
-    "pymc>=5.0.0",
-    "pytensor>=2.0.0",
-    "scipy>=1.11.0",
-    "zarr>=2.16.0",
-    "pandas>=2.0.0",
-    "pyvista>=0.42.0",
-    "matplotlib>=3.7.0",
-    "tomli>=2.0.0",
-    "tqdm>=4.65.0",
+    "numpy",
+    # "torch==2.6.0+cu124",
+    "torch>2",
+    "pymc",
+    "pytensor",
+    "scipy",
+    "zarr",
+    "pandas",
+    "pyvista",
+    "matplotlib",
+    "tomli",
+    "tqdm",
     "frame-core",
 ]
 
@@ -24,6 +25,7 @@ frame-geo = "frame_geo.cli:main"
 
 [tool.uv.sources]
 frame-core = { workspace = true }
+# torch = { index = "pytorch-cu124" }
 
 [build-system]
 requires = ["uv_build>=0.8.14,<0.9.0"]
@@ -31,6 +33,6 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
-    "pytest>=8.4.2",
-    "pytest-cov>=7.0.0",
+    "pytest",
+    "pytest-cov",
 ]
