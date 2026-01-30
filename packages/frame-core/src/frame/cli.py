@@ -951,6 +951,33 @@ def main():
                 )
             elif args.twin_command == "optimize":
                 twin_cli.optimize_vae(args.config, resume=args.resume)
+            elif args.twin_command == "view-ddpm":
+                # Collect conditioning parameters from args
+                # argparse converts --shell1-radius-nm to shell1_radius_nm attribute
+                conditioning_kwargs = {}
+                conditioning_params = [
+                    'shell1_radius_nm', 'shell1_head_thickness_nm', 'shell1_tail_thickness_nm',
+                    'shell2_probability', 'shell2_head_thickness_nm', 'shell2_tail_thickness_nm',
+                    'payload_core_radius_nm', 'payload_shell_head_thickness_nm', 'payload_shell_tail_thickness_nm',
+                    'payload_packing_fraction', 'target_num_blebs', 'bleb_shell_radius_nm',
+                    'bleb_shell_head_thickness_nm', 'bleb_shell_tail_thickness_nm'
+                ]
+                for param in conditioning_params:
+                    # argparse stores --shell1-radius-nm as shell1_radius_nm
+                    if hasattr(args, param):
+                        value = getattr(args, param)
+                        if value is not None:
+                            conditioning_kwargs[param] = value
+                
+                twin_cli.view_ddpm_structures(
+                    experiment_uuid=args.experiment_uuid,
+                    num_samples=args.num_samples,
+                    device=args.device,
+                    trial_uuid=getattr(args, "trial_uuid", None),
+                    ddpm_steps=getattr(args, "ddpm_steps", None),
+                    cfg_scale=getattr(args, "cfg_scale", 1.0),
+                    **conditioning_kwargs
+                )
             else:
                 print(f"Unknown twin command: {args.twin_command}")
                 sys.exit(1)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Dict
 
 
 def _resolve_library_path(library_ref: str) -> tuple[Path, str]:
@@ -127,6 +127,60 @@ def register_subcommands(subparsers):
         action='store_true',
         help='Resume existing study if it exists'
     )
+
+    # View DDPM command
+    view_ddpm_parser = twin_subparsers.add_parser(
+        'view-ddpm', help='Generate and visualize structures from trained DDPM'
+    )
+    view_ddpm_parser.add_argument(
+        'experiment_uuid',
+        help='DDPM experiment UUID (must have dependent VAE experiment)'
+    )
+    view_ddpm_parser.add_argument(
+        '-n', '--num-samples',
+        type=int,
+        default=1,
+        help='Number of structures to generate (default: 1)'
+    )
+    view_ddpm_parser.add_argument(
+        '--device',
+        default='auto',
+        choices=['auto', 'cpu', 'cuda', 'mps'],
+        help='Device to use (default: auto)'
+    )
+    view_ddpm_parser.add_argument(
+        '--trial',
+        dest='trial_uuid',
+        default=None,
+        help='Optional trial UUID for Optuna experiments (trial_*)'
+    )
+    view_ddpm_parser.add_argument(
+        '--ddpm-steps',
+        type=int,
+        default=None,
+        help='DDPM sampling steps (default: model\'s trained steps)'
+    )
+    view_ddpm_parser.add_argument(
+        '--cfg-scale',
+        type=float,
+        default=1.0,
+        help='Classifier-free guidance scale (default: 1.0, >1.0 for stronger conditioning)'
+    )
+    # Conditioning parameters (all optional)
+    view_ddpm_parser.add_argument('--shell1-radius-nm', type=float, default=None)
+    view_ddpm_parser.add_argument('--shell1-head-thickness-nm', type=float, default=None)
+    view_ddpm_parser.add_argument('--shell1-tail-thickness-nm', type=float, default=None)
+    view_ddpm_parser.add_argument('--shell2-probability', type=float, default=None)
+    view_ddpm_parser.add_argument('--shell2-head-thickness-nm', type=float, default=None)
+    view_ddpm_parser.add_argument('--shell2-tail-thickness-nm', type=float, default=None)
+    view_ddpm_parser.add_argument('--payload-core-radius-nm', type=float, default=None)
+    view_ddpm_parser.add_argument('--payload-shell-head-thickness-nm', type=float, default=None)
+    view_ddpm_parser.add_argument('--payload-shell-tail-thickness-nm', type=float, default=None)
+    view_ddpm_parser.add_argument('--payload-packing-fraction', type=float, default=None)
+    view_ddpm_parser.add_argument('--target-num-blebs', type=float, default=None)
+    view_ddpm_parser.add_argument('--bleb-shell-radius-nm', type=float, default=None)
+    view_ddpm_parser.add_argument('--bleb-shell-head-thickness-nm', type=float, default=None)
+    view_ddpm_parser.add_argument('--bleb-shell-tail-thickness-nm', type=float, default=None)
 
 
 def main():
@@ -2070,6 +2124,230 @@ napari.run()
             napari.run()
         except KeyboardInterrupt:
             print("Visualization interrupted by user")
+
+
+def view_ddpm_structures(
+    experiment_uuid: str,
+    num_samples: int = 1,
+    device: str = 'auto',
+    trial_uuid: Optional[str] = None,
+    ddpm_steps: Optional[int] = None,
+    cfg_scale: float = 1.0,
+    **conditioning_kwargs
+) -> None:
+    """Generate and visualize structures from trained DDPM model.
+    
+    Args:
+        experiment_uuid: DDPM experiment UUID
+        num_samples: Number of structures to generate
+        device: Device to use ('auto', 'cpu', 'cuda', 'mps')
+        trial_uuid: Optional trial UUID for Optuna experiments
+        ddpm_steps: Optional DDPM sampling steps (default: model's trained steps)
+        cfg_scale: Classifier-free guidance scale
+        **conditioning_kwargs: Conditioning parameters (e.g., shell1_radius_nm=45.0)
+    """
+    import torch
+    from .inference import Sampler
+    from frame.visualize_napari import NapariViewer
+    from frame.management import ExperimentManager, CheckpointManager
+    
+    print("\n" + "="*80)
+    print("DDPM STRUCTURE GENERATION AND VISUALIZATION")
+    print("="*80)
+    
+    # Load DDPM experiment and checkpoint
+    try:
+        ddpm_experiment, ddpm_checkpoint, ddpm_checkpoint_data = _load_experiment_and_checkpoint(
+            experiment_uuid,
+            trial_uuid=trial_uuid
+        )
+    except ValueError as exc:
+        print(f"Error: {exc}")
+        sys.exit(1)
+    
+    if ddpm_experiment.model_type != 'ddpm':
+        print(f"Error: Experiment {experiment_uuid} is not a DDPM experiment (type: {ddpm_experiment.model_type})")
+        sys.exit(1)
+    
+    print(f"\nDDPM Experiment: {ddpm_experiment.name} ({ddpm_experiment.uuid})")
+    
+    # Extract VAE experiment UUID from dependencies or checkpoint config
+    vae_experiment_uuid = ddpm_experiment.dependencies.get('vae_experiment')
+    if not vae_experiment_uuid:
+        # Fallback: check checkpoint config (for experiments created before dependency tracking)
+        vae_experiment_uuid = ddpm_checkpoint_data.get('config', {}).get('model', {}).get('vae_experiment_uuid')
+    
+    if not vae_experiment_uuid:
+        print("Error: Could not find VAE experiment UUID")
+        print("Checked: experiment dependencies and checkpoint config")
+        sys.exit(1)
+    
+    print(f"Loading VAE experiment: {vae_experiment_uuid}")
+    
+    # Load VAE experiment and checkpoint
+    try:
+        vae_experiment, vae_checkpoint, vae_checkpoint_data = _load_experiment_and_checkpoint(
+            vae_experiment_uuid
+        )
+    except ValueError as exc:
+        print(f"Error loading VAE experiment: {exc}")
+        sys.exit(1)
+    
+    if vae_experiment.model_type not in ('vae', 'unet_vae'):
+        print(f"Error: VAE experiment {vae_experiment_uuid} is not a VAE/UNetVAE (type: {vae_experiment.model_type})")
+        sys.exit(1)
+    
+    print(f"VAE Experiment: {vae_experiment.name} ({vae_experiment.uuid})")
+    
+    # Determine device
+    device_obj = _determine_device(device)
+    
+    # Create sampler from checkpoints
+    print("\nLoading models...")
+    sampler = Sampler.from_checkpoints(
+        vae_path=str(vae_checkpoint.checkpoint_path),
+        ddpm_path=str(ddpm_checkpoint.checkpoint_path),
+        device=device_obj
+    )
+    
+    # Check if model uses conditioning
+    has_conditioning = (
+        sampler.ddpm.conditioning_strategy is not None and
+        sampler.ddpm.conditioning_strategy.get_conditioning_dim() > 0
+    )
+    
+    # Collect conditioning parameters
+    conditioning = {}
+    if has_conditioning:
+        # Get parameter names from conditioning strategy
+        parameter_names = sampler.ddpm.conditioning_strategy.parameter_names
+        
+        # Check if any conditioning parameters were provided via CLI
+        provided_params = {k: v for k, v in conditioning_kwargs.items() if v is not None}
+        
+        if provided_params:
+            # Use provided parameters
+            print(f"\nUsing conditioning parameters from CLI:")
+            for param_name in parameter_names:
+                # Provided params already use underscore names (from argparse)
+                if param_name in provided_params:
+                    conditioning[param_name] = provided_params[param_name]
+                    print(f"  {param_name}: {provided_params[param_name]}")
+                else:
+                    conditioning[param_name] = None  # Mask token
+        else:
+            # Prompt for parameters interactively
+            print(f"\nModel uses conditioning. Please provide parameter values:")
+            print("(Press Enter for empty value to use mask token)")
+            conditioning = _prompt_for_conditioning_params(parameter_names)
+    else:
+        print("\nModel does not use conditioning (unconditional generation)")
+    
+    # Generate structures
+    print(f"\nGenerating {num_samples} structure(s)...")
+    voxel_grids = sampler.generate(
+        num_samples=num_samples,
+        conditioning=conditioning if conditioning else None,
+        ddpm_steps=ddpm_steps,
+        cfg_scale=cfg_scale
+    )
+    
+    print(f"Generated {len(voxel_grids)} structure(s)")
+    
+    # Display in napari
+    print("\nOpening structures in napari...")
+    import napari
+    
+    for i, voxel_grid in enumerate(voxel_grids):
+        viewer = NapariViewer.view_structure(
+            voxel_grid=voxel_grid,
+            opacity=0.25,
+            empty_threshold=0.01
+        )
+        try:
+            viewer.title = f"Generated Structure {i+1}/{num_samples}"
+        except AttributeError:  # pragma: no cover
+            viewer.window._qt_window.setWindowTitle(f"Generated Structure {i+1}/{num_samples}")
+        
+        if i == 0:
+            # Run napari for the first viewer (blocks until closed)
+            print(f"Viewing structure {i+1}/{num_samples} (close window to continue)")
+            napari.run()
+        else:
+            # For additional structures, open in separate process
+            print(f"Opening structure {i+1}/{num_samples} in separate window")
+            import subprocess
+            import tempfile
+            import pickle
+            
+            with tempfile.TemporaryDirectory() as temp_dir:
+                voxel_path = Path(temp_dir) / f"structure_{i}.pkl"
+                with open(voxel_path, 'wb') as f:
+                    pickle.dump(voxel_grid, f)
+                
+                script_path = Path(temp_dir) / "view_structure.py"
+                with open(script_path, 'w') as f:
+                    f.write(f'''#!/usr/bin/env python3
+import sys
+import pickle
+import napari
+from pathlib import Path
+
+sys.path.insert(0, "{Path(__file__).parent.parent.parent.parent}")
+
+from frame.visualize_napari import NapariViewer
+
+with open("{voxel_path}", 'rb') as f:
+    voxel_grid = pickle.load(f)
+
+viewer = NapariViewer.view_structure(
+    voxel_grid=voxel_grid,
+    opacity=0.25,
+    empty_threshold=0.01
+)
+try:
+    viewer.title = "Generated Structure {i+1}/{num_samples}"
+except AttributeError:
+    viewer.window._qt_window.setWindowTitle("Generated Structure {i+1}/{num_samples}")
+
+napari.run()
+''')
+                script_path.chmod(0o755)
+                subprocess.Popen([sys.executable, str(script_path)])
+    
+    print("\nVisualization complete!")
+
+
+def _prompt_for_conditioning_params(parameter_names: List[str]) -> Dict[str, Optional[float]]:
+    """Prompt user for conditioning parameter values interactively.
+    
+    Args:
+        parameter_names: List of parameter names to prompt for
+        
+    Returns:
+        Dictionary mapping parameter names to values (None for mask tokens)
+    """
+    conditioning = {}
+    
+    for param_name in parameter_names:
+        while True:
+            try:
+                user_input = input(f"  {param_name}: ").strip()
+                if not user_input:
+                    # Empty input = mask token
+                    conditioning[param_name] = None
+                    break
+                else:
+                    value = float(user_input)
+                    conditioning[param_name] = value
+                    break
+            except ValueError:
+                print(f"    Invalid input. Please enter a number or press Enter for mask token.")
+            except KeyboardInterrupt:
+                print("\n\nInterrupted by user")
+                sys.exit(1)
+    
+    return conditioning
 
 
 if __name__ == "__main__":
