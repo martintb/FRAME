@@ -5,12 +5,17 @@ members = ["packages/*", "apps/*"]
 frame-core = { workspace = true }
 frame-geo = { workspace = true }
 frame-twin = { workspace = true }
+xcube = { workspace = true }
 
 [tool.uv]
 dev-dependencies = [
     "pytest",
     "pytest-cov",
 ]
+
+[tool.uv.extra-build-dependencies]
+fvdb-core = ["torch"]
+sparsehash = ["Cython"]
 
 # [[tool.uv.index]]
 # name = "pytorch-cu124"

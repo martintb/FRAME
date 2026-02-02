@@ -1,0 +1,125 @@
+# Test configuration for XCube export
+[metadata]
+name = "lnp_xcube_test"
+description = "LNP generation with XCube export"
+random_seed = 42
+
+[structure]
+type = "lnp"
+
+[grid]
+nx = 128
+ny = 128
+nz = 128
+dx_nm = 1.0
+dy_nm = 1.0
+dz_nm = 1.0
+
+[generation]
+num_samples = 5
+library_name = "test_xcube_export"
+parallel_workers = 1
+max_retries_per_sample = 100
+flush_batch_size = 5
+sample_uniform_lhs = false
+
+[output]
+save_parametric = true
+save_voxelized = true
+save_validation_logs = true
+save_statistics = true
+save_xcube = true
+
+[xcube]
+enabled = true
+resolutions = [128]
+channel_threshold = 0.1
+voxel_size_scale = 1.28
+num_reference_points = 10000
+
+# Shell1 (outer bilayer shell)
+[priors.shell1_radius_nm]
+distribution = "Uniform"
+lower = 30.0
+upper = 40.0
+
+[priors.shell1_head_thickness_nm]
+distribution = "Uniform"
+lower = 1.0
+upper = 1.1
+
+[priors.shell1_tail_thickness_nm]
+distribution = "Uniform"
+lower = 3.0
+upper = 3.5
+
+# Shell2 (optional inner shell)
+[priors.shell2_probability]
+distribution = "Beta"
+alpha = 2.0
+beta = 2.0
+
+[priors.shell2_head_thickness_nm]
+distribution = "Uniform"
+lower = 1.0
+upper = 1.1
+
+[priors.shell2_tail_thickness_nm]
+distribution = "Uniform"
+lower = 3.0
+upper = 3.5
+
+# Payloads
+[priors.payload_core_radius_nm]
+distribution = "Uniform"
+lower = 8.0
+upper = 12.0
+
+[priors.payload_shell_head_thickness_nm]
+distribution = "Uniform"
+lower = 1.0
+upper = 1.1
+
+[priors.payload_shell_tail_thickness_nm]
+distribution = "Uniform"
+lower = 3.0
+upper = 3.5
+
+[priors.payload_packing_fraction]
+distribution = "Uniform"
+lower = 0.0
+upper = 0.1
+
+# Blebs (surface protrusions)
+[priors.target_num_blebs]
+distribution = "Uniform"
+lower = 0.0
+upper = 3.0
+
+[priors.bleb_shell_radius_nm]
+distribution = "Uniform"
+lower = 5.0
+upper = 8.0
+
+[priors.bleb_shell_head_thickness_nm]
+distribution = "Uniform"
+lower = 1.0
+upper = 1.1
+
+[priors.bleb_shell_tail_thickness_nm]
+distribution = "Uniform"
+lower = 3.0
+upper = 3.5
+
+# Voxelization channel mapping
+[voxelization.channels]
+shell1_head = 0
+shell1_tail = 1
+shell2_head = 2
+shell2_tail = 3
+payload_head = 4
+payload_tail = 5
+payload_core = 6
+bleb_head = 7
+bleb_tail = 8
+solvent = 9

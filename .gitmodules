@@ -1,0 +1,4 @@
+[submodule "packages/xcube"]
+	path = packages/xcube
+	url = https://github.com/martintb/XCube.git
+	branch = FRAME_dev

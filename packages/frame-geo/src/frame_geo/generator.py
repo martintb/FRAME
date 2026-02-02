@@ -23,6 +23,13 @@ from frame.voxel_grid import VoxelGrid
 from frame.storage import VoxelLibraryWriter
 from frame.management import LibraryManager
 
+# Lazy import for XCube export (only if enabled)
+try:
+    from .export.xcube import XCubeExporter, FVDB_AVAILABLE as XCUBE_AVAILABLE
+except ImportError:
+    XCUBE_AVAILABLE = False
+    XCubeExporter = None
+
 
 def _process_structure_batch(params_batch, config_dict, structure_type, validation_config, voxelization_config, save_voxelized, save_parametric):
     """Worker function to process a batch of parameter sets.
@@ -137,6 +144,17 @@ class StructureGenerator:
         self.parametric_storage = None
         self.voxel_writer = None
 
+        # XCube exporter (lazy initialization if enabled)
+        self.xcube_exporter = None
+        if config.output.save_xcube and config.xcube is not None:
+            if not XCUBE_AVAILABLE:
+                raise ImportError(
+                    "XCube export is enabled but fvdb is not installed. "
+                    "Install it from: https://github.com/AcademySoftwareFoundation/openvdb (feature/fvdb branch)\n"
+                    "See FRAME documentation for detailed installation instructions."
+                )
+            self.xcube_exporter = XCubeExporter(config.xcube)
+
         # Statistics tracking
         self.validation_stats = {name: 0 for name in self.validators.keys()}
         self.validation_stats["total_attempts"] = 0
@@ -171,6 +189,15 @@ class StructureGenerator:
             # Initialize storage for this library
             if self.config.output.save_parametric:
                 self.parametric_storage = ParametricStorage(str(self.library_path))
+
+            # Create XCube directory structure if enabled
+            if self.config.output.save_xcube and self.xcube_exporter:
+                xcube_dir = self.library_path / "xcube"
+                xcube_dir.mkdir(exist_ok=True)
+                # Create resolution-specific subdirectories
+                for resolution in self.config.xcube.resolutions:
+                    (xcube_dir / str(resolution)).mkdir(exist_ok=True)
+                print(f"Created XCube export directories for resolutions: {self.config.xcube.resolutions}")
 
             # Sample from priors
             print(f"Sampling structures (target: {self.config.generation.num_samples})...")
@@ -477,7 +504,7 @@ class StructureGenerator:
 
     def _flush_batch(self, structures, voxels, params, start_index):
         """Flush a batch of structures to disk.
-        
+
         Args:
             structures: List of parametric structures
             voxels: List of voxel grids
@@ -487,12 +514,12 @@ class StructureGenerator:
         # Write parametric structures
         if self.config.output.save_parametric and structures:
             self.parametric_storage.append_structures(structures, start_index)
-        
+
         # Write voxel structures
         if self.config.output.save_voxelized and voxels and self.voxel_writer:
             for i, (voxel_tensor, param) in enumerate(zip(voxels, params)):
                 global_idx = start_index + i
-                
+
                 # Convert tensor to VoxelGrid
                 voxel_grid = VoxelGrid(
                     data=voxel_tensor,
@@ -500,7 +527,7 @@ class StructureGenerator:
                     channels=self.config.voxelization.get("channels", {}),
                     metadata={}
                 )
-                
+
                 # Convert parameters to dict
                 param_dict = {
                     "shell1_radius_nm": param.shell1_radius_nm,
@@ -510,8 +537,24 @@ class StructureGenerator:
                     "actual_num_payloads": param.actual_num_payloads,
                     "actual_num_blebs": param.actual_num_blebs,
                 }
-                
+
                 self.voxel_writer.add_structure(global_idx, voxel_grid, param_dict)
+
+        # Export to XCube format if enabled
+        if self.config.output.save_xcube and self.xcube_exporter and voxels:
+            xcube_dir = self.library_path / "xcube"
+            for i, (voxel_tensor, structure) in enumerate(zip(voxels, structures)):
+                global_idx = start_index + i
+                try:
+                    self.xcube_exporter.export_structure(
+                        voxel_data=voxel_tensor,
+                        parametric_structure=structure,
+                        voxel_size=self.config.grid.dx_nm,
+                        output_dir=xcube_dir,
+                        structure_idx=global_idx
+                    )
+                except Exception as e:
+                    print(f"Warning: XCube export failed for structure {global_idx}: {e}")
 
     def _save_metadata(self) -> None:
         """Save metadata files (validation logs, statistics, config)."""
@@ -544,6 +587,22 @@ class StructureGenerator:
         }
         with open(config_copy_path, "w") as f:
             json.dump(config_dict, f, indent=2)
+
+        # Save XCube metadata if enabled
+        if self.config.output.save_xcube and self.xcube_exporter:
+            print("Saving XCube metadata...")
+            xcube_metadata = {
+                "format": "xcube",
+                "resolutions": self.config.xcube.resolutions,
+                "channel_threshold": self.config.xcube.channel_threshold,
+                "voxel_size_scale": self.config.xcube.voxel_size_scale,
+                "num_reference_points": self.config.xcube.num_reference_points,
+                "num_structures": self.validation_stats["total_accepted"],
+            }
+            self.xcube_exporter.write_metadata(
+                self.library_path / "xcube",
+                xcube_metadata
+            )
 
     def _generate_visualizations(self, structures) -> None:
         """Generate visualizations for a subset of structures."""

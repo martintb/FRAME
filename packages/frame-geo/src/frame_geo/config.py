@@ -1,8 +1,8 @@
 """Configuration parsing from TOML files."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 import tomli
 
 
@@ -55,6 +55,28 @@ class GenerationConfig:
 
 
 @dataclass
+class XCubeConfig:
+    """XCube format export configuration."""
+
+    enabled: bool = False
+    resolutions: List[int] = field(default_factory=lambda: [128])
+    channel_threshold: float = 0.1
+    voxel_size_scale: float = 1.28  # XCube normalization (128/100)
+    num_reference_points: int = 100_000
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "XCubeConfig":
+        """Create from dictionary."""
+        return cls(
+            enabled=data.get("enabled", False),
+            resolutions=data.get("resolutions", [128]),
+            channel_threshold=data.get("channel_threshold", 0.1),
+            voxel_size_scale=data.get("voxel_size_scale", 1.28),
+            num_reference_points=data.get("num_reference_points", 100_000),
+        )
+
+
+@dataclass
 class OutputConfig:
     """Output configuration."""
 
@@ -62,6 +84,7 @@ class OutputConfig:
     save_voxelized: bool = True
     save_validation_logs: bool = True
     save_statistics: bool = True
+    save_xcube: bool = False
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "OutputConfig":
@@ -71,6 +94,7 @@ class OutputConfig:
             save_voxelized=data.get("save_voxelized", True),
             save_validation_logs=data.get("save_validation_logs", True),
             save_statistics=data.get("save_statistics", True),
+            save_xcube=data.get("save_xcube", False),
         )
 
 
@@ -87,6 +111,7 @@ class FrameGeoConfig:
     validation: Dict[str, Any]
     voxelization: Dict[str, Any]
     visualization: Optional[Dict[str, Any]] = None
+    xcube: Optional[XCubeConfig] = None
 
     @classmethod
     def from_toml(cls, path: str | Path) -> "FrameGeoConfig":
@@ -120,6 +145,11 @@ class FrameGeoConfig:
         voxelization = data.get("voxelization", {})
         visualization = data.get("visualization", None)
 
+        # Parse XCube config if present
+        xcube = None
+        if "xcube" in data:
+            xcube = XCubeConfig.from_dict(data["xcube"])
+
         return cls(
             metadata=metadata,
             structure_type=structure_type,
@@ -130,6 +160,7 @@ class FrameGeoConfig:
             validation=validation,
             voxelization=voxelization,
             visualization=visualization,
+            xcube=xcube,
         )
 
     def validate(self) -> None:
