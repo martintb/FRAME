@@ -51,6 +51,21 @@ def register_subcommands(subparsers):
         "--random", type=int, help="Number of random structures to visualize"
     )
 
+    # View PKL command (XCube-style sparse grids)
+    view_pkl_parser = geo_subparsers.add_parser(
+        "view-pkl", help="View XCube-style .pkl sparse grids in napari"
+    )
+    view_pkl_parser.add_argument("pkl_path", type=str, help="Path to .pkl file")
+    view_pkl_parser.add_argument(
+        "--normal-scale", type=float, default=2.0, help="Normal vector scale in voxel units"
+    )
+    view_pkl_parser.add_argument(
+        "--point-size", type=float, default=None, help="Point size for napari points layer"
+    )
+    view_pkl_parser.add_argument(
+        "--max-points", type=int, default=None, help="Max points to display (randomly sampled)"
+    )
+
     # Stats command
     stats_parser = geo_subparsers.add_parser(
         "stats", help="Print parameter statistics from parametric structures"
@@ -140,6 +155,21 @@ def main():
         "--no-save", action="store_true", help="Don't save plots to files (only with --interactive)"
     )
 
+    # View PKL command (XCube-style sparse grids)
+    view_pkl_parser = subparsers.add_parser(
+        "view-pkl", help="View XCube-style .pkl sparse grids in napari"
+    )
+    view_pkl_parser.add_argument("pkl_path", type=str, help="Path to .pkl file")
+    view_pkl_parser.add_argument(
+        "--normal-scale", type=float, default=2.0, help="Normal vector scale in voxel units"
+    )
+    view_pkl_parser.add_argument(
+        "--point-size", type=float, default=None, help="Point size for napari points layer"
+    )
+    view_pkl_parser.add_argument(
+        "--max-points", type=int, default=None, help="Max points to display (randomly sampled)"
+    )
+
     # Stats command
     stats_parser = subparsers.add_parser(
         "stats", help="Print parameter statistics from parametric structures"
@@ -186,6 +216,8 @@ def main():
         list_types_command()
     elif args.command == "visualize":
         visualize_command(args)
+    elif args.command == "view-pkl":
+        view_pkl_command(args)
     elif args.command == "stats":
         stats_command(args)
     elif args.command == "voxelize":
@@ -527,6 +559,126 @@ def visualize_command(args):
         sys.exit(1)
 
 
+def view_pkl_command(args):
+    """Execute view-pkl command."""
+    try:
+        import numpy as np
+        import torch
+        try:
+            import fvdb  # noqa: F401
+        except Exception:
+            print("Error: fvdb is required to load XCube .pkl files", file=sys.stderr)
+            sys.exit(1)
+
+        from frame import VoxelGrid, NapariViewer
+
+        pkl_path = Path(args.pkl_path)
+        if not pkl_path.exists():
+            print(f"Error: PKL path not found: {pkl_path}", file=sys.stderr)
+            sys.exit(1)
+
+        try:
+            from torch.serialization import safe_globals
+        except Exception:
+            safe_globals = None
+
+        if safe_globals is None:
+            data = torch.load(pkl_path, map_location="cpu", weights_only=False)
+        else:
+            allowlist = [fvdb.grid_batch.GridBatch, fvdb.jagged_tensor.JaggedTensor]
+            if hasattr(fvdb, "_fvdb_cpp"):
+                allowlist.append(fvdb._fvdb_cpp.GridBatch)
+                if hasattr(fvdb._fvdb_cpp, "JaggedTensor"):
+                    allowlist.append(fvdb._fvdb_cpp.JaggedTensor)
+            with safe_globals(allowlist):
+                data = torch.load(pkl_path, map_location="cpu")
+        if "points" not in data or "normals" not in data:
+            print("Error: .pkl missing required keys: 'points' and 'normals'", file=sys.stderr)
+            sys.exit(1)
+
+        points_grid = data["points"]
+        normals = data["normals"]
+
+        if not hasattr(points_grid, "ijk"):
+            print("Error: 'points' does not look like an fvdb GridBatch", file=sys.stderr)
+            sys.exit(1)
+
+        ijk = points_grid.ijk.jdata.to(torch.int64).cpu()
+        if ijk.numel() == 0:
+            print("Error: No points found in grid", file=sys.stderr)
+            sys.exit(1)
+
+        min_ijk = ijk.min(dim=0)[0]
+        max_ijk = ijk.max(dim=0)[0]
+        ijk_offset = torch.zeros_like(min_ijk)
+        if (min_ijk < 0).any():
+            ijk_offset = -min_ijk
+            ijk = ijk + ijk_offset
+            max_ijk = max_ijk + ijk_offset
+
+        # Dense occupancy volume for NapariViewer (C, D, H, W)
+        d = int(max_ijk[2].item()) + 1
+        h = int(max_ijk[1].item()) + 1
+        w = int(max_ijk[0].item()) + 1
+        occupancy = torch.zeros((1, d, h, w), dtype=torch.float32)
+        occupancy[0, ijk[:, 2], ijk[:, 1], ijk[:, 0]] = 1.0
+
+        voxel_size = 1.0
+        if hasattr(points_grid, "voxel_sizes"):
+            try:
+                vs = points_grid.voxel_sizes
+                vs_tensor = torch.as_tensor(vs).flatten()
+                voxel_size = float(vs_tensor[0].item())
+            except Exception:
+                voxel_size = 1.0
+
+        voxel_grid = VoxelGrid(
+            data=occupancy,
+            voxel_size=voxel_size,
+            channels={"occupancy": 0},
+            metadata={"source": str(pkl_path), "ijk_offset": ijk_offset.tolist()}
+        )
+
+        viewer = NapariViewer.view_structure(voxel_grid, opacity=0.15)
+
+        xyz = points_grid.grid_to_world(points_grid.ijk.float()).jdata.cpu().numpy()
+        if ijk_offset.any().item():
+            xyz = xyz + (ijk_offset.numpy() * voxel_size)
+        if hasattr(normals, "jdata"):
+            normal_vecs = normals.jdata.cpu().numpy()
+        else:
+            normal_vecs = normals.cpu().numpy()
+
+        if args.max_points is not None and xyz.shape[0] > args.max_points:
+            rng = np.random.default_rng(0)
+            choice = rng.choice(xyz.shape[0], size=args.max_points, replace=False)
+            xyz = xyz[choice]
+            normal_vecs = normal_vecs[choice]
+
+        if args.point_size is None:
+            point_size = max(voxel_size * 2.0, 0.5)
+        else:
+            point_size = args.point_size
+        viewer.add_points(xyz, name="points", size=point_size, face_color="white", opacity=0.6)
+
+        normal_scale = args.normal_scale * voxel_size
+        vectors = np.stack([xyz, xyz + normal_vecs * normal_scale], axis=1)
+        viewer.add_vectors(vectors, name="normals", edge_width=0.5, opacity=0.7)
+
+        import napari
+        print("Opening napari... Close the window to exit.")
+        napari.run()
+
+    except FileNotFoundError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Unexpected error: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+
 def voxelize_command(args):
     """Execute voxelize command."""
     try:
@@ -725,4 +877,3 @@ def _load_structure_parameters(store, idx: int) -> Dict[str, Any]:
 
 if __name__ == "__main__":
     main()
-

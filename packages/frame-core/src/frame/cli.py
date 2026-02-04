@@ -856,6 +856,8 @@ def main():
                 geo_cli.list_types_command()
             elif args.geo_command == "visualize":
                 geo_cli.visualize_command(args)
+            elif args.geo_command == "view-pkl":
+                geo_cli.view_pkl_command(args)
             elif args.geo_command == "stats":
                 geo_cli.stats_command(args)
             elif args.geo_command == "voxelize":

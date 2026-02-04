@@ -317,7 +317,7 @@ class XCubeExporter:
         # XCube uses normalized coordinates: scale by voxel_size_scale
         effective_voxel_size = voxel_size * self.config.voxel_size_scale / resolution
 
-        grid = fvdb.sparse_grid_from_ijk(
+        grid = fvdb.GridBatch.from_ijk(
             fvdb.JaggedTensor([ijk]),
             voxel_sizes=effective_voxel_size,
             origins=[effective_voxel_size / 2.0] * 3

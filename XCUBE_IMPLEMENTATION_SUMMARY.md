@@ -137,33 +137,6 @@ frame_data/libraries/{uuid}/
 - Configurable via `voxel_size_scale` (default: 1.28)
 - Maintains physical units throughout pipeline
 
-## Dependency Management
-
-### The fvdb Challenge
-
-The original plan included adding `fvdb` as a pip dependency. However, we discovered:
-
-1. **Wrong Package**: PyPI has a database package called `fvdb`, not the sparse voxel library
-2. **Source Only**: The correct fvdb is part of OpenVDB and must be built from source
-3. **Platform Limited**: Currently Linux-only with CUDA requirements
-
-### Solution Implemented
-
-- **Lazy import**: XCube functionality only imported when enabled
-- **Graceful degradation**: Clear error messages if fvdb not available
-- **Optional feature**: XCube export is opt-in, doesn't break existing workflows
-- **Documentation**: Detailed installation instructions in `XCUBE_EXPORT.md`
-
-### Installation Path for fvdb
-
-```bash
-git clone https://github.com/AcademySoftwareFoundation/openvdb.git
-cd openvdb
-git fetch origin pull/1808/head:feature/fvdb
-git checkout feature/fvdb
-cd fvdb && pip install .
-```
-
 ## Configuration Example
 
 ```toml
